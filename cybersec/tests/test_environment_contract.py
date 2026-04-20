@@ -43,6 +43,7 @@ def test_step_after_terminal_returns_terminal_observation() -> None:
         post_terminal.info.get("invalid_action")
         == "episode_already_terminated_call_reset"
     )
+    assert post_terminal.info.get("terminal_reason") == "horizon_reached"
 
 
 def test_reset_is_deterministic_for_same_seed_and_scenario() -> None:
@@ -142,6 +143,7 @@ def test_reward_breakdown_and_valid_targets_present() -> None:
     assert "identities" in obs.valid_targets
     assert "query_log_sources" in obs.valid_targets
     assert "ticketable_actions" in obs.valid_targets
+    assert "pending_forensics_targets" in obs.valid_targets
 
 
 def test_reset_supports_scenario_switch() -> None:
@@ -150,3 +152,19 @@ def test_reset_supports_scenario_switch() -> None:
 
     assert obs.scenario_id == "federated_identity_takeover"
     assert "identity" in obs.valid_targets.get("query_log_sources", [])
+
+
+def test_duplicate_forensics_request_returns_invalid_action() -> None:
+    env = _new_env()
+    env.reset(seed=7)
+
+    first = env.step(
+        CybersecAction(action_type="REQUEST_FORENSICS", target="ws-dev-12")
+    )
+    assert first.done is False
+
+    second = env.step(
+        CybersecAction(action_type="REQUEST_FORENSICS", target="ws-dev-12")
+    )
+    assert second.done is False
+    assert "already pending" in str(second.info.get("invalid_action", ""))

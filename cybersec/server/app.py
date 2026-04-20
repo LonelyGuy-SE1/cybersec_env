@@ -18,7 +18,7 @@ except Exception as e:  # pragma: no cover
 try:
     from ..models import CybersecAction, CybersecObservation
     from .cybersec_environment import CybersecEnvironment
-except ModuleNotFoundError:
+except ImportError:
     from models import CybersecAction, CybersecObservation
     from server.cybersec_environment import CybersecEnvironment
 
@@ -28,9 +28,10 @@ def _env_int(name: str, default: int) -> int:
     if raw is None or raw.strip() == "":
         return default
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError as exc:
         raise RuntimeError(f"Environment variable {name} must be an integer") from exc
+    return value
 
 
 def _env_optional_int(name: str) -> int | None:
@@ -38,9 +39,10 @@ def _env_optional_int(name: str) -> int | None:
     if raw is None or raw.strip() == "":
         return None
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError as exc:
         raise RuntimeError(f"Environment variable {name} must be an integer") from exc
+    return value
 
 
 def _env_optional_float(name: str) -> float | None:
@@ -48,16 +50,62 @@ def _env_optional_float(name: str) -> float | None:
     if raw is None or raw.strip() == "":
         return None
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError as exc:
         raise RuntimeError(f"Environment variable {name} must be a float") from exc
+    return value
+
+
+def _bounded_int(
+    *,
+    value: int | None,
+    name: str,
+    minimum: int,
+    maximum: int | None = None,
+) -> int | None:
+    if value is None:
+        return None
+    if value < minimum:
+        raise RuntimeError(f"Environment variable {name} must be >= {minimum}")
+    if maximum is not None and value > maximum:
+        raise RuntimeError(f"Environment variable {name} must be <= {maximum}")
+    return value
+
+
+def _bounded_float(
+    *,
+    value: float | None,
+    name: str,
+    minimum: float,
+    maximum: float,
+) -> float | None:
+    if value is None:
+        return None
+    if value < minimum or value > maximum:
+        raise RuntimeError(
+            f"Environment variable {name} must be between {minimum} and {maximum}"
+        )
+    return value
 
 
 def _env_factory() -> CybersecEnvironment:
     scenario_id = os.getenv("CYBERSEC_SCENARIO_ID", "supply_chain_token_drift")
-    horizon = _env_optional_int("CYBERSEC_HORIZON")
-    false_positive_rate = _env_optional_float("CYBERSEC_FALSE_POSITIVE_RATE")
-    seed = _env_optional_int("CYBERSEC_DEFAULT_SEED")
+    horizon = _bounded_int(
+        value=_env_optional_int("CYBERSEC_HORIZON"),
+        name="CYBERSEC_HORIZON",
+        minimum=1,
+    )
+    false_positive_rate = _bounded_float(
+        value=_env_optional_float("CYBERSEC_FALSE_POSITIVE_RATE"),
+        name="CYBERSEC_FALSE_POSITIVE_RATE",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    seed = _bounded_int(
+        value=_env_optional_int("CYBERSEC_DEFAULT_SEED"),
+        name="CYBERSEC_DEFAULT_SEED",
+        minimum=0,
+    )
     return CybersecEnvironment(
         scenario_id=scenario_id,
         seed=seed,
@@ -66,12 +114,21 @@ def _env_factory() -> CybersecEnvironment:
     )
 
 
+def _max_concurrent_envs() -> int:
+    value = _env_int("CYBERSEC_MAX_CONCURRENT_ENVS", 4)
+    if value < 1:
+        raise RuntimeError(
+            "Environment variable CYBERSEC_MAX_CONCURRENT_ENVS must be >= 1"
+        )
+    return value
+
+
 app = create_app(
     _env_factory,
     CybersecAction,
     CybersecObservation,
     env_name="cybersec",
-    max_concurrent_envs=_env_int("CYBERSEC_MAX_CONCURRENT_ENVS", 4),
+    max_concurrent_envs=_max_concurrent_envs(),
 )
 
 

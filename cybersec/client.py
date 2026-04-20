@@ -12,13 +12,22 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from .models import (
-    CybersecAction,
-    CybersecObservation,
-    ForensicsUpdate,
-    SecurityAlert,
-    WorkflowTicket,
-)
+try:
+    from .models import (
+        CybersecAction,
+        CybersecObservation,
+        ForensicsUpdate,
+        SecurityAlert,
+        WorkflowTicket,
+    )
+except ImportError:
+    from models import (
+        CybersecAction,
+        CybersecObservation,
+        ForensicsUpdate,
+        SecurityAlert,
+        WorkflowTicket,
+    )
 
 
 class CybersecEnv(EnvClient[CybersecAction, CybersecObservation, State]):
@@ -116,5 +125,10 @@ class CybersecEnv(EnvClient[CybersecAction, CybersecObservation, State]):
     def _parse_state(self, payload: Dict[str, Any]) -> State:
         return State(
             episode_id=payload.get("episode_id"),
-            step_count=payload.get("step_count", 0),
+            step_count=int(payload.get("step_count", 0)),
+            done=bool(payload.get("done", False)),
+            scenario_id=payload.get("scenario_id"),
+            horizon=payload.get("horizon"),
+            enterprise_risk_score=payload.get("enterprise_risk_score"),
+            terminal_reason=payload.get("terminal_reason"),
         )

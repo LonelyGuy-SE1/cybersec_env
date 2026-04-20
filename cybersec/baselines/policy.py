@@ -190,8 +190,14 @@ class HeuristicPolicy:
         if not valid_targets:
             return None
 
+        pending_forensics = set(
+            observation.valid_targets.get("pending_forensics_targets", [])
+        )
+
         for alert in pending_alerts:
             if alert.entity not in valid_targets:
+                continue
+            if alert.entity in pending_forensics:
                 continue
             if alert.confidence < self._cfg.forensics_confidence_threshold:
                 continue

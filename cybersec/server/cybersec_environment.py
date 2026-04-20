@@ -204,7 +204,7 @@ class CybersecEnvironment(Environment[CybersecAction, CybersecObservation, State
                 done=True,
                 info={
                     "phase": "terminal",
-                    "termination_reason": self._terminal_reason,
+                    "terminal_reason": self._terminal_reason,
                     "invalid_action": "episode_already_terminated_call_reset",
                     "last_action_error": "episode_already_terminated_call_reset",
                     "available_actions": [],
@@ -366,6 +366,14 @@ class CybersecEnvironment(Environment[CybersecAction, CybersecObservation, State
                     penalty=0.10,
                 )
                 return
+            pending_targets = set(self._telemetry.pending_forensics_targets())
+            if target in pending_targets:
+                self._set_invalid(
+                    f"Forensics job already pending for '{target}'",
+                    signals=signals,
+                    penalty=0.04,
+                )
+                return
             job = self._telemetry.create_forensics_job(
                 target=target,
                 target_type=target_type,
@@ -480,15 +488,17 @@ class CybersecEnvironment(Environment[CybersecAction, CybersecObservation, State
         for asset in self._world.assets.values():
             if asset.compromised and not self._world.is_asset_contained(asset.asset_id):
                 delta = weight * 0.45
-                self._world.adjust_evidence(asset.asset_id, delta)
-                gain += delta
+                current = self._world.evidence_for(asset.asset_id)
+                updated = self._world.adjust_evidence(asset.asset_id, delta)
+                gain += max(0.0, updated - current)
         for identity in self._world.identities.values():
             if identity.compromised and not self._world.is_identity_contained(
                 identity.identity_id
             ):
                 delta = weight * 0.40
-                self._world.adjust_evidence(identity.identity_id, delta)
-                gain += delta
+                current = self._world.evidence_for(identity.identity_id)
+                updated = self._world.adjust_evidence(identity.identity_id, delta)
+                gain += max(0.0, updated - current)
         return min(0.30, gain)
 
     def _apply_control_signals(
@@ -692,6 +702,9 @@ class CybersecEnvironment(Environment[CybersecAction, CybersecObservation, State
             ticket.ticket_id for ticket in self._workflow.visible_tickets()
         ]
         targets["ready_ticket_ids"] = list(self._workflow.ready_ticket_ids())
+        targets["pending_forensics_targets"] = list(
+            sorted(set(self._telemetry.pending_forensics_targets()))
+        )
         targets["query_log_sources"] = [
             "identity",
             "endpoint",

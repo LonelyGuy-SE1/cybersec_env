@@ -157,6 +157,12 @@ with CybersecEnv(base_url="http://localhost:8000") as env:
         print(result.observation.info.get("reward_breakdown"))
 ```
 
+### 4) Inference run
+
+```bash
+python inference.py --env local --mode heuristic --scenarios supply_chain_token_drift --seeds 101 --max-steps 32
+```
+
 ## Workflow Mechanics
 
 High-impact controls can be applied either:
@@ -182,6 +188,13 @@ Server supports environment variables:
 
 ```bash
 docker build -t cybersec-env:latest -f server/Dockerfile .
+```
+
+### Runtime validation
+
+```bash
+python -m pytest -q
+openenv validate .
 ```
 
 ### OpenEnv validation
@@ -233,6 +246,7 @@ cybersec/
 - Baseline policies and runner: `baselines/policy.py`, `baselines/runner.py`
 - Multi-scenario benchmark runner: `scripts/evaluate_baselines.py`
 - Deterministic trace exporter: `scripts/run_demo_trace.py`
+- Inference runner (local or remote): `inference.py`
 
 Example:
 
@@ -242,6 +256,23 @@ python scripts/run_demo_trace.py --scenario insider_repo_pivot --seed 404
 ```
 
 Generated artifacts are written to `outputs/evals/`.
+
+## Inference Runner
+
+Run deterministic inference episodes (baseline heuristic/random or LLM-backed policy):
+
+```bash
+# local heuristic inference
+python inference.py --env local --mode heuristic --scenarios supply_chain_token_drift --seeds 101
+
+# remote inference against a running endpoint
+ENV_BASE_URL=http://localhost:8000 python inference.py --env remote --mode heuristic
+
+# remote LLM-guided inference (falls back to heuristic on parse/contract errors)
+HF_TOKEN=<token> API_BASE_URL=https://router.huggingface.co/v1 python inference.py --env remote --mode llm
+```
+
+Output summary is written to `outputs/evals/inference_results.json` by default.
 
 ## Training Scaffold
 

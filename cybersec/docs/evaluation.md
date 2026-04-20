@@ -50,3 +50,12 @@ The current baseline set includes:
 
 - random policy (`RandomPolicy`)
 - rule-based heuristic policy (`HeuristicPolicy`)
+
+## Submission Readiness Checklist
+
+To keep quality aligned with external evaluation criteria, ensure every release includes:
+
+- OpenEnv validation pass on the exact deployed environment.
+- A minimal inference/training entry point with deterministic seeds.
+- Observable reward and behavior comparison across baseline and improved policy runs.
+- Clear explanation artifacts (short write-up or brief video) with reproducible commands.

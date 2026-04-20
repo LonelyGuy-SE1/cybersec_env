@@ -205,6 +205,14 @@ class TelemetryEngine:
                 world.adjust_evidence(job.target, -0.03)
         return ready
 
+    def pending_forensics_targets(self) -> List[str]:
+        """Return targets with active in-flight forensics jobs."""
+        targets = []
+        for job in self._forensics_jobs:
+            if not job.completed:
+                targets.append(job.target)
+        return targets
+
     def _create_alert(
         self,
         *,

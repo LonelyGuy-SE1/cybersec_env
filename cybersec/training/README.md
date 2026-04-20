@@ -7,6 +7,7 @@ This directory provides a production-oriented scaffold for policy training and b
 - deterministic baseline evaluation (`scripts/evaluate_baselines.py`)
 - deterministic single-trace export (`scripts/run_demo_trace.py`)
 - deterministic trajectory dataset export (`training/export_dataset.py`)
+- deterministic inference runs (`inference.py`)
 - benchmark artifacts under `outputs/evals/`
 
 ## Planned Expansion
