@@ -227,3 +227,24 @@ cybersec/
 - `docs/reward.md` reward decomposition and grading logic.
 - `docs/scenarios.md` deterministic scenario catalog.
 - `docs/evaluation.md` benchmark and demo protocol.
+
+## Baselines and Evaluation Scripts
+
+- Baseline policies and runner: `baselines/policy.py`, `baselines/runner.py`
+- Multi-scenario benchmark runner: `scripts/evaluate_baselines.py`
+- Deterministic trace exporter: `scripts/run_demo_trace.py`
+
+Example:
+
+```bash
+python scripts/evaluate_baselines.py --scenarios supply_chain_token_drift,federated_identity_takeover --seeds 101,202,303
+python scripts/run_demo_trace.py --scenario insider_repo_pivot --seed 404
+```
+
+Generated artifacts are written to `outputs/evals/`.
+
+## Training Scaffold
+
+- Training scaffold docs: `training/README.md`
+- Dataset export utility: `training/export_dataset.py`
+- This includes baseline/evaluation entry points plus trajectory export for downstream RL/behavioral training.

@@ -2,3 +2,9 @@ idea.txt
 *.pdf
 **/__pycache__/
 **/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+cybersec/outputs/evals/*.json
+cybersec/outputs/evals/*.csv
+cybersec/outputs/evals/*.md
+cybersec/outputs/logs/*.log
