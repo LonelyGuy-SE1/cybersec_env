@@ -7,10 +7,21 @@
 """Cybersec Environment."""
 
 from .client import CybersecEnv
-from .models import CybersecAction, CybersecObservation
+from .models import (
+    CybersecAction,
+    CybersecObservation,
+    CybersecRewardBreakdown,
+    ForensicsUpdate,
+    SecurityAlert,
+    WorkflowTicket,
+)
 
 __all__ = [
     "CybersecAction",
     "CybersecObservation",
+    "CybersecRewardBreakdown",
+    "ForensicsUpdate",
+    "SecurityAlert",
+    "WorkflowTicket",
     "CybersecEnv",
 ]

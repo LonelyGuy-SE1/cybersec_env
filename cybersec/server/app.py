@@ -4,29 +4,9 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""
-FastAPI application for the Cybersec Environment.
+"""FastAPI application for CybersecEnv."""
 
-This module creates an HTTP server that exposes the CybersecEnvironment
-over HTTP and WebSocket endpoints, compatible with EnvClient.
-
-Endpoints:
-    - POST /reset: Reset the environment
-    - POST /step: Execute an action
-    - GET /state: Get current environment state
-    - GET /schema: Get action/observation schemas
-    - WS /ws: WebSocket endpoint for persistent sessions
-
-Usage:
-    # Development (with auto-reload):
-    uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
-
-    # Production:
-    uvicorn server.app:app --host 0.0.0.0 --port 8000 --workers 4
-
-    # Or run directly:
-    python -m server.app
-"""
+import os
 
 try:
     from openenv.core.env_server.http_server import create_app
@@ -43,13 +23,55 @@ except ModuleNotFoundError:
     from server.cybersec_environment import CybersecEnvironment
 
 
-# Create the app with web interface and README integration
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Environment variable {name} must be an integer") from exc
+
+
+def _env_optional_int(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Environment variable {name} must be an integer") from exc
+
+
+def _env_optional_float(name: str) -> float | None:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Environment variable {name} must be a float") from exc
+
+
+def _env_factory() -> CybersecEnvironment:
+    scenario_id = os.getenv("CYBERSEC_SCENARIO_ID", "supply_chain_token_drift")
+    horizon = _env_optional_int("CYBERSEC_HORIZON")
+    false_positive_rate = _env_optional_float("CYBERSEC_FALSE_POSITIVE_RATE")
+    seed = _env_optional_int("CYBERSEC_DEFAULT_SEED")
+    return CybersecEnvironment(
+        scenario_id=scenario_id,
+        seed=seed,
+        horizon=horizon,
+        false_positive_rate=false_positive_rate,
+    )
+
+
 app = create_app(
-    CybersecEnvironment,
+    _env_factory,
     CybersecAction,
     CybersecObservation,
     env_name="cybersec",
-    max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
+    max_concurrent_envs=_env_int("CYBERSEC_MAX_CONCURRENT_ENVS", 4),
 )
 
 
@@ -76,9 +98,4 @@ def main(host: str = "0.0.0.0", port: int = 8000):
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
-    main(port=args.port)
+    main()

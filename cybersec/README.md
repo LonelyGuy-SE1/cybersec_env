@@ -1,255 +1,229 @@
 ---
 title: Cybersec Environment Server
-emoji: ⛳
-colorFrom: yellow
-colorTo: pink
+emoji: "🛡️"
+colorFrom: red
+colorTo: blue
 sdk: docker
 pinned: false
 app_port: 8000
 base_path: /web
 tags:
   - openenv
+  - cybersecurity
+  - long-horizon
+  - multi-agent
 ---
 
-# Cybersec Environment
+# CybersecEnv
 
-A simple test environment that echoes back messages. Perfect for testing the env APIs as well as demonstrating environment usage patterns.
+CybersecEnv is a long-horizon, partially observable enterprise incident-response environment for OpenEnv.
+It is designed for reinforcement learning agents that must make cost-aware decisions under uncertainty while
+containing a staged adversarial campaign before exfiltration.
+
+The environment is intentionally structured for rigorous research and operational evaluation:
+
+- **Innovation**: hidden attacker policy, workflow-gated operations, delayed effects, noisy telemetry.
+- **Storytelling**: replayable campaign timelines over cloud, code, identity, and network systems.
+- **Measurable Improvement**: deterministic seeded scenarios and benchmark-friendly grading channels.
+- **Pipeline readiness**: OpenEnv-native API contract (`reset`, `step`, `state`) and deployable Docker stack.
+
+## Current Status
+
+This repository now contains:
+
+- Multi-agent world simulation (defender + adaptive attacker + enterprise workflow actor).
+- Long-horizon campaign progression with deterministic scenario definitions.
+- Typed, strict action/observation models aligned with OpenEnv schemas.
+- Reward decomposition and terminal grading signals for training and evaluation.
+
+## Environment Summary
+
+### Agent and world roles
+
+- **Controllable RL agent**: SOC Commander (defender).
+- **Simulated adversary**: adaptive attacker policy with campaign path switching.
+- **Simulated enterprise workflow actor**: ticket review and delayed execution windows.
+
+### Partial observability
+
+- Agent sees noisy alerts, ticket states, and asynchronous forensics updates.
+- Ground-truth compromise state and full attacker internals remain hidden.
+
+### Long-horizon dynamics
+
+- Episodes run for a fixed horizon (default from scenario, typically 30+ steps).
+- Attacker progresses through multi-stage campaign chains.
+- Defender actions can have delayed impact via workflow and forensics mechanisms.
+
+## Action Contract
+
+`CybersecAction` uses a strict typed contract:
+
+- `action_type`: one of
+  - `MONITOR`
+  - `QUERY_LOGS`
+  - `TRIAGE_ALERT`
+  - `REQUEST_FORENSICS`
+  - `OPEN_TICKET`
+  - `EXECUTE_TICKET`
+  - `ISOLATE_ASSET`
+  - `REVOKE_IDENTITY`
+  - `ROTATE_SECRET`
+  - `BLOCK_EGRESS`
+  - `PATCH_ASSET`
+- `target`: required for target-bound actions.
+- `parameter`:
+  - required as log source for `QUERY_LOGS`
+  - required as requested control action for `OPEN_TICKET`
+- `urgency`: `low|normal|high` (used for ticket workflow prioritization).
+
+Invalid action contracts are rejected by model validators before environment logic runs.
+
+## Observation Contract
+
+`CybersecObservation` includes:
+
+- Scenario metadata (`scenario_id`, `scenario_title`, `scenario_objective`).
+- Time info (`tick`, `horizon`).
+- Risk signal (`enterprise_risk_score`).
+- Alert stream (`alerts`) and ticket queue (`open_tickets`).
+- Async updates (`ticket_updates`, `forensics_updates`).
+- Defender-known compromise sets and activity narrative.
+- Action affordances (`available_actions`, `valid_targets`).
+- `info` channel with machine-readable diagnostics:
+  - reward breakdown
+  - attacker event summary
+  - workflow and forensics updates
+  - terminal grading fields when episode ends
+
+## Reward and Grading
+
+Step reward uses weighted channels:
+
+- Positive: detection gain, containment gain, terminal outcome quality.
+- Negative: adversary progress, disruption cost, governance bypass cost,
+  efficiency cost, false positives, invalid actions.
+
+Terminal grading (in `info`) includes:
+
+- `grader_score` in `[0,1]`
+- `grader_success` boolean
+- `terminal_reason` (`horizon_reached` or `adversary_exfiltration`)
+
+## Scenario Suite
+
+Deterministic scenario catalog (`server/scenario_loader.py`):
+
+- `supply_chain_token_drift`
+- `federated_identity_takeover`
+- `insider_repo_pivot`
+
+Each scenario defines:
+
+- enterprise assets and identities
+- at least two attack paths
+- path steps with prerequisites, detection strengths, and progression weights
+- default horizon and telemetry noise characteristics
 
 ## Quick Start
 
-The simplest way to use the Cybersec environment is through the `CybersecEnv` class:
+### 1) Install
+
+```bash
+uv sync
+```
+
+### 2) Run locally
+
+```bash
+uv run server --port 8000
+```
+
+### 3) Minimal client interaction
 
 ```python
 from cybersec import CybersecAction, CybersecEnv
 
-try:
-    # Create environment from Docker image
-    cybersecenv = CybersecEnv.from_docker_image("cybersec-env:latest")
+with CybersecEnv(base_url="http://localhost:8000") as env:
+    result = env.reset()
+    print(result.observation.scenario_id)
 
-    # Reset
-    result = cybersecenv.reset()
-    print(f"Reset: {result.observation.echoed_message}")
+    result = env.step(CybersecAction(action_type="QUERY_LOGS", parameter="cloud"))
+    print(result.observation.enterprise_risk_score, result.reward)
 
-    # Send multiple messages
-    messages = ["Hello, World!", "Testing echo", "Final message"]
-
-    for msg in messages:
-        result = cybersecenv.step(CybersecAction(message=msg))
-        print(f"Sent: '{msg}'")
-        print(f"  → Echoed: '{result.observation.echoed_message}'")
-        print(f"  → Length: {result.observation.message_length}")
-        print(f"  → Reward: {result.reward}")
-
-finally:
-    # Always clean up
-    cybersecenv.close()
+    if result.observation.alerts:
+        alert_id = result.observation.alerts[0].alert_id
+        result = env.step(CybersecAction(action_type="TRIAGE_ALERT", target=alert_id))
+        print(result.observation.info.get("reward_breakdown"))
 ```
 
-That's it! The `CybersecEnv.from_docker_image()` method handles:
-- Starting the Docker container
-- Waiting for the server to be ready
-- Connecting to the environment
-- Container cleanup when you call `close()`
+## Workflow Mechanics
 
-## Building the Docker Image
+High-impact controls can be applied either:
 
-Before using the environment, you need to build the Docker image:
+- directly (faster, but higher governance penalty), or
+- through enterprise tickets (`OPEN_TICKET` + `EXECUTE_TICKET`) with review/approval delays.
+
+This creates realistic trade-offs between speed and compliance.
+
+## Configuration
+
+Server supports environment variables:
+
+- `CYBERSEC_SCENARIO_ID` (default `supply_chain_token_drift`)
+- `CYBERSEC_HORIZON` (optional override)
+- `CYBERSEC_FALSE_POSITIVE_RATE` (optional override)
+- `CYBERSEC_DEFAULT_SEED` (optional deterministic default)
+- `CYBERSEC_MAX_CONCURRENT_ENVS` (default `4`)
+
+## Build and Deploy
+
+### Docker build
 
 ```bash
-# From project root
 docker build -t cybersec-env:latest -f server/Dockerfile .
 ```
 
-## Deploying to Hugging Face Spaces
-
-You can easily deploy your OpenEnv environment to Hugging Face Spaces using the `openenv push` command:
+### OpenEnv validation
 
 ```bash
-# From the environment directory (where openenv.yaml is located)
-openenv push
-
-# Or specify options
-openenv push --namespace my-org --private
+openenv validate .
 ```
 
-The `openenv push` command will:
-1. Validate that the directory is an OpenEnv environment (checks for `openenv.yaml`)
-2. Prepare a custom build for Hugging Face Docker space (enables web interface)
-3. Upload to Hugging Face (ensuring you're logged in)
-
-### Prerequisites
-
-- Authenticate with Hugging Face: The command will prompt for login if not already authenticated
-
-### Options
-
-- `--directory`, `-d`: Directory containing the OpenEnv environment (defaults to current directory)
-- `--repo-id`, `-r`: Repository ID in format 'username/repo-name' (defaults to 'username/env-name' from openenv.yaml)
-- `--base-image`, `-b`: Base Docker image to use (overrides Dockerfile FROM)
-- `--private`: Deploy the space as private (default: public)
-
-### Examples
+### Push to Hugging Face Space
 
 ```bash
-# Push to your personal namespace (defaults to username/env-name from openenv.yaml)
-openenv push
-
-# Push to a specific repository
-openenv push --repo-id my-org/my-env
-
-# Push with a custom base image
-openenv push --base-image ghcr.io/meta-pytorch/openenv-base:latest
-
-# Push as a private space
-openenv push --private
-
-# Combine options
-openenv push --repo-id my-org/my-env --base-image custom-base:latest --private
-```
-
-After deployment, your space will be available at:
-`https://huggingface.co/spaces/<repo-id>`
-
-The deployed space includes:
-- **Web Interface** at `/web` - Interactive UI for exploring the environment
-- **API Documentation** at `/docs` - Full OpenAPI/Swagger interface
-- **Health Check** at `/health` - Container health monitoring
-- **WebSocket** at `/ws` - Persistent session endpoint for low-latency interactions
-
-## Environment Details
-
-### Action
-**CybersecAction**: Contains a single field
-- `message` (str) - The message to echo back
-
-### Observation
-**CybersecObservation**: Contains the echo response and metadata
-- `echoed_message` (str) - The message echoed back
-- `message_length` (int) - Length of the message
-- `reward` (float) - Reward based on message length (length × 0.1)
-- `done` (bool) - Always False for echo environment
-- `metadata` (dict) - Additional info like step count
-
-### Reward
-The reward is calculated as: `message_length × 0.1`
-- "Hi" → reward: 0.2
-- "Hello, World!" → reward: 1.3
-- Empty message → reward: 0.0
-
-## Advanced Usage
-
-### Connecting to an Existing Server
-
-If you already have a Cybersec environment server running, you can connect directly:
-
-```python
-from cybersec import CybersecEnv
-
-# Connect to existing server
-cybersecenv = CybersecEnv(base_url="<ENV_HTTP_URL_HERE>")
-
-# Use as normal
-result = cybersecenv.reset()
-result = cybersecenv.step(CybersecAction(message="Hello!"))
-```
-
-Note: When connecting to an existing server, `cybersecenv.close()` will NOT stop the server.
-
-### Using the Context Manager
-
-The client supports context manager usage for automatic connection management:
-
-```python
-from cybersec import CybersecAction, CybersecEnv
-
-# Connect with context manager (auto-connects and closes)
-with CybersecEnv(base_url="http://localhost:8000") as env:
-    result = env.reset()
-    print(f"Reset: {result.observation.echoed_message}")
-    # Multiple steps with low latency
-    for msg in ["Hello", "World", "!"]:
-        result = env.step(CybersecAction(message=msg))
-        print(f"Echoed: {result.observation.echoed_message}")
-```
-
-The client uses WebSocket connections for:
-- **Lower latency**: No HTTP connection overhead per request
-- **Persistent session**: Server maintains your environment state
-- **Efficient for episodes**: Better for many sequential steps
-
-### Concurrent WebSocket Sessions
-
-The server supports multiple concurrent WebSocket connections. To enable this,
-modify `server/app.py` to use factory mode:
-
-```python
-# In server/app.py - use factory mode for concurrent sessions
-app = create_app(
-    CybersecEnvironment,  # Pass class, not instance
-    CybersecAction,
-    CybersecObservation,
-    max_concurrent_envs=4,  # Allow 4 concurrent sessions
-)
-```
-
-Then multiple clients can connect simultaneously:
-
-```python
-from cybersec import CybersecAction, CybersecEnv
-from concurrent.futures import ThreadPoolExecutor
-
-def run_episode(client_id: int):
-    with CybersecEnv(base_url="http://localhost:8000") as env:
-        result = env.reset()
-        for i in range(10):
-            result = env.step(CybersecAction(message=f"Client {client_id}, step {i}"))
-        return client_id, result.observation.message_length
-
-# Run 4 episodes concurrently
-with ThreadPoolExecutor(max_workers=4) as executor:
-    results = list(executor.map(run_episode, range(4)))
-```
-
-## Development & Testing
-
-### Direct Environment Testing
-
-Test the environment logic directly without starting the HTTP server:
-
-```bash
-# From the server directory
-python3 server/cybersec_environment.py
-```
-
-This verifies that:
-- Environment resets correctly
-- Step executes actions properly
-- State tracking works
-- Rewards are calculated correctly
-
-### Running Locally
-
-Run the server locally for development:
-
-```bash
-uvicorn server.app:app --reload
+openenv push --repo-id <your-namespace>/<your-space-name>
 ```
 
 ## Project Structure
 
-```
+```text
 cybersec/
-├── .dockerignore         # Docker build exclusions
-├── __init__.py            # Module exports
-├── README.md              # This file
-├── openenv.yaml           # OpenEnv manifest
-├── pyproject.toml         # Project metadata and dependencies
-├── uv.lock                # Locked dependencies (generated)
-├── client.py              # CybersecEnv client
-├── models.py              # Action and Observation models
+├── __init__.py
+├── client.py
+├── models.py
+├── openenv.yaml
+├── pyproject.toml
+├── README.md
+├── uv.lock
 └── server/
-    ├── __init__.py        # Server module exports
-    ├── cybersec_environment.py  # Core environment logic
-    ├── app.py             # FastAPI application (HTTP + WebSocket endpoints)
-    └── Dockerfile         # Container image definition
+    ├── __init__.py
+    ├── app.py
+    ├── cybersec_environment.py
+    ├── attacker_policy.py
+    ├── telemetry.py
+    ├── workflow.py
+    ├── world_state.py
+    ├── reward_model.py
+    ├── scenario_loader.py
+    ├── requirements.txt
+    └── Dockerfile
 ```
+
+## Detailed Documentation
+
+- `docs/spec.md` formal environment contract and POMDP framing.
+- `docs/reward.md` reward decomposition and grading logic.
+- `docs/scenarios.md` deterministic scenario catalog.
+- `docs/evaluation.md` benchmark and demo protocol.
