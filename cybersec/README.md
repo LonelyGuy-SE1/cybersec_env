@@ -169,10 +169,9 @@ cybersec/                              # the OpenEnv env folder (package root)
     └── rewards.py                     # 9 TRL-compatible reward funcs + parsers
 ```
 
-The repo also ships `train.py`, `tests/`, and `notebooks/` *outside* this
-folder — those are training/eval infrastructure, not part of the env package
-itself. Judges installing the package via `pip install` only ever see the
-`cybersec/` folder.
+The repo also ships `tests/` and `notebooks/` *outside* this folder — training
+and eval infrastructure, not part of the env package itself. Judges installing
+the package via `pip install` only ever see the `cybersec/` folder.
 
 ---
 
@@ -258,8 +257,9 @@ HF Space WebSocket API (i.e. the same transport judges use):
 | `cloud_metadata_ssrf` (OOD)    |  1.45           |  **2.55**          | 0%                     |
 
 (Numbers above are the iter-3 measured baseline; they do not change in
-iter-4 since the env itself didn't change. Reproducible via
-`python train.py --baseline-only`.)
+iter-4 since the env itself didn't change. Reproducible with the same protocol
+in [`../notebooks/cybersec_grpo.ipynb`](../notebooks/cybersec_grpo.ipynb) and,
+for remote baselines, by pointing the client at the Space WebSocket API.)
 
 Random's "win" on the insider scenario is exactly the kind of artifact we
 *want* a good reward function to reveal: random wins by burning the network
@@ -272,87 +272,46 @@ containment that beats heuristic on the held-out scenario.
 
 ## 6. Training story
 
-There are two equivalent UX surfaces. Both run the same pipeline,
-write the same artifacts, and use the same reward functions —
-choose whichever your reviewer prefers:
+**Canonical path:** [`../notebooks/cybersec_grpo.ipynb`](../notebooks/cybersec_grpo.ipynb)
+— baselines, dataset build, GRPO, **base-LLM (no LoRA) vs trained-adapter** eval
+on the same seeds, tables, and strict canaries. In Colab, the install cell pulls
+the env from the deployed HF Space (no separate GitHub clone). Set
+`HUGGINGFACE_HUB_TOKEN` / `HF_TOKEN` in Colab secrets to avoid unauthenticated
+hub noise when downloading Qwen. Wall clock is **~2h+** on a free T4 with the
+**final** `MODE` defaults (`grpo_max_steps=300` and 30 post-train seeds); lower
+`grpo_max_steps` and episode counts for a smoke run.
 
-| Entry point | Best for |
-|---|---|
-| [`../train.py`](../train.py) | Headless GPU runs (`python train.py`). One command, end-to-end, fits in a tmux pane. |
-| [`../notebooks/cybersec_grpo.ipynb`](../notebooks/cybersec_grpo.ipynb) | Click-through Colab / Kaggle. Same code, but Run-All shows every step. |
+**Pipeline (notebook):**
 
-Both pull the env package straight from the deployed HF Space, so the
-Space *is* the canonical source — no GitHub clone required. Roughly
-**65-85 min** of wall clock from cold install to before/after plots on
-a free Colab T4 / Kaggle P100, at the iter-4 defaults below.
+1. **Baseline** — `RandomPolicy` + `HeuristicPolicy` over N seeds (default
+   30) on all training scenarios **and** the held-out OOD scenario. Default
+   rollouts are **in-process** (`CybersecEnvironment`); set
+   `MODE["use_remote_env"]` to smoke the WebSocket path against the live Space.
+2. **Dataset build** (local) — up to 1500 `(state-snapshot, prompt)` rows from
+   heuristic rollouts on **training scenarios only** (held-out is excluded by
+   design).
+3. **QLoRA + GRPO** — Unsloth 4-bit Qwen2.5-1.5B-Instruct, then TRL GRPO with
+   **~300** `max_steps` (tune for your GPU), **6** generations, `temperature=1.2`,
+   `beta=0.04`, `lr=3e-6` — the same *intent* as iter-4, aimed at
+   **non-collapsed** per-scenario variance. Scored by the reward family in
+   [`cybersec/training/rewards.py`](training/rewards.py) (schema, env step,
+   shaping, anti-collapse, batch entropy, etc.). Writes
+   `_artifacts/qwen_cybersec_lora/`, `training_log.json`, `training_diagnostics.png`.
+4. **Eval** — (optional) **Base Qwen, no LoRA** on the same eval matrix, then
+   reload the **adapter** via Unsloth and eval the trained policy. Produces
+   before/after curves, `summary_table.md`, and JSON metrics (including
+   `base_llm` when enabled).
+5. **Sanity canaries** (notebook asserts):
+   - heuristic > random on aggregate,
+   - high valid-action rate (trained),
+   - trained not far below random on any **train** scenario,
+   - **≥ 2 of 3** training scenarios with `std_return > 0.1` for the trained
+     policy (strict iter-3/4 rule),
+   - **`monitor_fallback_rate` ≤ 50%** on the trained run.
 
-**Pipeline:**
-
-1. **Baseline** — `RandomPolicy` + `HeuristicPolicy` over 30 seeds × 3
-   training scenarios + 1 held-out OOD scenario (`cloud_metadata_ssrf`,
-   never seen during training). Writes `_artifacts/baseline_metrics.json`
-   and the per-scenario reward-curve plot. Episodes go over the **OpenEnv
-   WebSocket protocol** to the deployed HF Space — same transport a judge
-   will use.
-2. **Dataset build** (local) — ~1500 `(state-snapshot, prompt)` pairs
-   harvested from heuristic rollouts on the **training scenarios only**.
-   Each prompt is paired with a pickled `CybersecEnvironment`, so GRPO
-   reward functions can clone the env and score candidate actions
-   against the *real* environment dynamics. This step is local because
-   `pickle` and a live WebSocket don't mix.
-3. **GRPO training** — Unsloth-loaded Qwen2.5-1.5B-Instruct, 4-bit QLoRA,
-   then TRL GRPO for **120 steps × 6 generations/prompt** at
-   `temperature=1.2`, `beta=0.04`, `lr=3e-6` (iter-4 defaults), scored
-   by **nine independent reward functions** in
-   [`cybersec/training/rewards.py`](training/rewards.py):
-   - 4 schema/validity rewards (JSON valid, schema valid, target in
-     `valid_targets`, no redundant containment),
-   - 1 actual env-step reward via cloned snapshot,
-   - 1 exfil-path shaping prior,
-   - 3 **anti-collapse rewards**: `reward_action_diversity`
-     (within-group rarity), `reward_observation_aware` (state-conditioned
-     behaviour), and **iter-4's `reward_batch_action_entropy`** — a
-     batch-wide entropy bonus that gives a non-zero gradient *out* of
-     full collapse, not just a barrier preventing entry to it.
-
-   Saves the LoRA adapter to `_artifacts/qwen_cybersec_lora/`, per-step
-   reward components to `_artifacts/training_log.json`, and
-   KL/loss/per-component diagnostic plots to
-   `_artifacts/training_diagnostics.png`.
-4. **Trained-policy eval** — reloads the adapter via Unsloth (so the
-   same fused-QKV attention patch used during training is present at
-   inference) and re-runs the same 30 seeds × 3 train scenarios from
-   step 1, then a separate **held-out OOD eval** on `cloud_metadata_ssrf`,
-   all over the live HF Space. Writes `_artifacts/before_after_curves.png`,
-   `_artifacts/summary_table.md`, `_artifacts/post_train_metrics.json`,
-   and `_artifacts/heldout_metrics.json`.
-5. **Sanity canaries** — the iter-4 gate before a run is shipped:
-   - heuristic > random on aggregate baseline return,
-   - trained-policy invalid-action rate ≤ 20%,
-   - trained-policy never >5pts below random on any train scenario,
-   - **≥ 2 of 3 train scenarios must have `std_return > 0.1`** (iter-3
-     passed the previous "any one" version while still being collapsed
-     on the other two),
-   - **`monitor_fallback_rate` ≤ 50%** — catches the case where a
-     "trained" policy is actually a wall of unparseable text saved by
-     the `MONITOR` fallback in `llm_act`.
-
-A single `MODE` dict (in both the notebook and `train.py`) controls
-every dial. `train.py` also accepts CLI overrides:
-
-```bash
-python train.py --grpo-max-steps 200 --n-baseline-episodes 50
-python train.py --baseline-only --mode local           # smoke test
-python train.py --grpo-temperature 1.4 --grpo-beta 0.06 # nudge anti-collapse
-```
-
-The core trick: every reward channel is already a separately-scored
-dense signal, so GRPO uses them as independent reward functions
-instead of one scalar. That, plus iter-4's three anti-collapse rewards
-and the bumped `num_generations`/`temperature`/`beta` defaults, is
-what makes gradients stable on a 1.5B model with batch size ≪ horizon.
-The canary suite at `tests/test_reward_hack_canaries.py` is the alarm
-that catches future mode-collapse regressions before they ship.
+Tweak the **`MODE` dict** at the top of the notebook. The canary suite in
+`tests/test_reward_hack_canaries.py` mirrors the *intent* of these checks
+for CI.
 
 ### Iteration history
 

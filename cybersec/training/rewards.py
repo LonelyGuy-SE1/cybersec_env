@@ -166,6 +166,56 @@ def restore_env(blob: str):
     return pickle.loads(base64.b64decode(blob.encode("ascii")))
 
 
+def collect_grpo_rows_from_rollouts(
+    scenario_ids: Sequence[str],
+    seeds: Sequence[int],
+    policy: Any,
+    *,
+    max_rows: int,
+    shuffle_seed: int = 0,
+) -> List[dict]:
+    """Build GRPO training rows by rolling ``policy`` through :class:`CybersecEnvironment`.
+
+    Schema matches the heuristic dataset builder: ``prompt``, ``system``,
+    ``valid_*`` metadata columns, and ``env_snapshot`` for
+    :func:`reward_step_total`. Only includes states **before** each ``step``
+    (snapshot taken, then policy acts, then env steps).
+
+    ``policy`` must implement ``act(obs) -> CybersecAction`` and optional
+    ``reset()``.
+    """
+
+    from ..server.cybersec_environment import CybersecEnvironment
+
+    rows: List[dict] = []
+    for sid in scenario_ids:
+        for seed in seeds:
+            ep_env = CybersecEnvironment()
+            if hasattr(policy, "reset"):
+                policy.reset()
+            obs = ep_env.reset(seed=seed, scenario_id=sid)
+            while not obs.done:
+                blob = snapshot_env(ep_env)
+                prompt = render_observation(obs)
+                rows.append({
+                    "prompt": prompt,
+                    "system": SYSTEM_PROMPT,
+                    "valid_assets": obs.valid_targets["assets"],
+                    "valid_identities": obs.valid_targets["identities"],
+                    "isolated_assets": list(obs.isolated_assets),
+                    "revoked_identities": list(obs.revoked_identities),
+                    "blocked_egress": list(obs.blocked_egress_assets),
+                    "patched": list(obs.patched_assets),
+                    "alert_count": len(obs.alerts),
+                    "env_snapshot": blob,
+                })
+                act = policy.act(obs)
+                obs = ep_env.step(act)
+    rng = __import__("random").Random(shuffle_seed)
+    rng.shuffle(rows)
+    return rows[:max_rows]
+
+
 # ---------------------------------------------------------------------------
 # Reward functions
 # ---------------------------------------------------------------------------
@@ -528,6 +578,7 @@ def default_reward_funcs() -> List[Callable[..., List[float]]]:
 
 __all__ = [
     "SYSTEM_PROMPT",
+    "collect_grpo_rows_from_rollouts",
     "default_reward_funcs",
     "parse_first_json_object",
     "parsed_action",

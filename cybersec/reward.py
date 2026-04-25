@@ -16,7 +16,9 @@ fixed range so a single overpowered signal cannot dominate training.
 Reward-hack guards:
   * Detection only fires on the *first* confirmation of a given target.
   * Containment only fires on attack-path targets (not arbitrary isolation).
-  * Disruption is bounded per tick.
+  * Disruption scales with weighted isolation load; optional per-tick cap
+   (``disruption_cap_per_tick``). Default is **uncapped** so mass-isolation
+   pays linearly and cannot be arbitraged against a small fixed penalty.
   * Per-step total is clipped to ``[-step_clip, +step_clip]``.
 """
 
@@ -47,7 +49,8 @@ class RewardWeights:
     false_positive_per_action: float = 0.6
     invalid_action: float = 0.6
     disruption_per_active_control: float = 0.08
-    disruption_cap_per_tick: float = 0.6
+    # None = no cap (full -raw_disruption). Set to e.g. 0.6 for legacy capped shaping.
+    disruption_cap_per_tick: float | None = None
     step_clip: float = 5.0
     terminal_clean_bonus: float = 5.0
     terminal_partial_per_stage: float = 0.6
@@ -104,9 +107,11 @@ class RewardModel:
         false_positive = -w.false_positive_per_action * signals.false_positive_count
         invalid = -w.invalid_action * signals.invalid_action_count
 
-        # Disruption uses the criticality-weighted sum but is capped per tick.
         raw_disruption = w.disruption_per_active_control * signals.weighted_disruption
-        disruption = -min(raw_disruption, w.disruption_cap_per_tick)
+        if w.disruption_cap_per_tick is None:
+            disruption = -raw_disruption
+        else:
+            disruption = -min(raw_disruption, w.disruption_cap_per_tick)
 
         terminal = self._terminal_score(signals) if signals.is_terminal else 0.0
 
