@@ -5,3 +5,14 @@ runtime: fastapi
 app: server.app:app
 port: 8000
 
+description: >
+  Long-horizon, multi-agent, partially observable enterprise cyber-defense
+  environment. The defender (the trainable agent) faces a scripted attacker
+  walking a MITRE ATT&CK-aligned stage DAG with stochastic dwell times and
+  detection delays. Three scenarios, three attacker personalities, six
+  defender actions, six-channel reward.
+
+env:
+  CYBERSEC_HOST: "0.0.0.0"
+  CYBERSEC_PORT: "8000"
+  CYBERSEC_MAX_CONCURRENT_ENVS: "8"

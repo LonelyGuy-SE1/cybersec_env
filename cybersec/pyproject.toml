@@ -1,32 +1,85 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
 [build-system]
-requires = ["setuptools>=45", "wheel"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "openenv-cybersec"
-version = "0.1.0"
-description = "Long-horizon enterprise cyber defense environment for OpenEnv"
-requires-python = ">=3.10"
+version = "0.2.0"
+description = "Long-horizon, multi-agent enterprise cyber-defense environment for OpenEnv"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Methuselah" },
+]
+keywords = ["openenv", "reinforcement-learning", "cybersecurity", "mitre-attack", "llm-rl"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Security",
+]
 dependencies = [
     "openenv-core[core]>=0.2.2",
+    "pydantic>=2.7",
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "websockets>=12.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
-    "pytest-cov>=4.0.0",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "httpx>=0.27",
+]
+notebooks = [
+    "jupyterlab>=4.0",
+    "matplotlib>=3.8",
+    "pandas>=2.2",
+    "ipywidgets>=8.0",
 ]
 
 [project.scripts]
-server = "cybersec.server.app:main"
+cybersec-server = "cybersec.server.app:main"
 
+[project.urls]
+Homepage = "https://github.com/methuselah/cybersec-openenv"
+Issues = "https://github.com/methuselah/cybersec-openenv/issues"
+
+# The env folder *is* the Python package root, exactly like `openenv init`
+# scaffolds. The folder name doesn't matter to setuptools because we map
+# explicitly: the package "cybersec" is rooted at "." (the env folder
+# itself), and "cybersec.server" is rooted at "./server".
 [tool.setuptools]
 include-package-data = true
-packages = ["cybersec", "cybersec.server"]
-package-dir = { "cybersec" = ".", "cybersec.server" = "server" }
+packages = [
+    "cybersec",
+    "cybersec.server",
+]
+
+[tool.setuptools.package-dir]
+cybersec = "."
+"cybersec.server" = "server"
+
+[tool.setuptools.package-data]
+cybersec = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["../tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]

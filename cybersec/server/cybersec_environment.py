@@ -1,736 +1,450 @@
-"""CybersecEnv multi-agent enterprise campaign environment."""
+"""CybersecEnvironment - the OpenEnv ``Environment`` subclass.
+
+Per OpenEnv contract this class implements ``reset(seed, episode_id, **kw)``,
+``step(action)``, and the ``state`` property. It owns:
+
+  * the active :class:`Scenario` (assets, identities, stages, horizon)
+  * an :class:`AttackerPolicy` carrying the per-episode personality
+  * a :class:`TelemetryEngine` for noise alerts and INVESTIGATE oracles
+  * a :class:`RewardModel` and the running cumulative reward
+  * the defender's control state: isolated assets, revoked identities,
+    blocked egress targets, patched assets, confirmed compromised targets
+
+Reset accepts two keyword overrides:
+
+  ``scenario_id``         - one of :func:`scenarios.list_scenarios`. If
+                             omitted, scenarios cycle deterministically by seed.
+  ``attacker_personality``- a :class:`AttackerPersonality` value. Sampled by
+                             RNG if omitted.
+
+Step contract:
+
+  * Every action consumes one tick.
+  * Invalid actions still consume the tick; defender pays an
+    ``invalid_action_penalty`` and no defender state is mutated.
+  * The episode terminates when ``tick >= horizon``, the attacker exfiltrates,
+    or the attack DAG has nothing left to advance.
+
+This module lives at ``cybersec.server.cybersec_environment`` per the
+official ``openenv init`` template layout.
+"""
 
 from __future__ import annotations
 
 import random
-from dataclasses import asdict
-from typing import Any, Dict, List, Optional
-from uuid import uuid4
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set
 
 from openenv.core.env_server.interfaces import Environment
-from openenv.core.env_server.types import EnvironmentMetadata, State
 
-try:
-    from ..models import (
-        ActionType,
-        CybersecAction,
-        CybersecObservation,
-        CybersecRewardBreakdown,
-        ForensicsUpdate,
-        SecurityAlert,
-        WorkflowTicket,
-    )
-except ImportError:
-    from models import (
-        ActionType,
-        CybersecAction,
-        CybersecObservation,
-        CybersecRewardBreakdown,
-        ForensicsUpdate,
-        SecurityAlert,
-        WorkflowTicket,
-    )
-
-from .attacker_policy import AttackerEvent, AttackerPolicy
-from .reward_model import RewardModel, StepSignals
-from .scenario_loader import get_scenario, list_scenarios
-from .telemetry import ForensicsJob, TelemetryEngine
-from .workflow import TicketRecord, WorkflowEngine
-from .world_state import ControlApplication, WorldState
-
-LogSource = str
+from ..attacker import (
+    AttackerEvent,
+    DefenderView,
+    ScriptedAttacker,
+    StageStatus,
+)
+from ..models import (
+    ActionType,
+    AlertEvent,
+    AttackerPersonality,
+    CybersecAction,
+    CybersecObservation,
+    CybersecState,
+    ForensicResult,
+)
+from ..reward import RewardModel, RewardWeights, StepSignals
+from ..scenarios import Scenario, get_scenario, list_scenarios
+from ..telemetry import TelemetryEngine
 
 
-class CybersecEnvironment(Environment[CybersecAction, CybersecObservation, State]):
-    """Long-horizon cyber defense environment with hidden attacker dynamics."""
+_ALERT_BUFFER = 12
+_FORENSIC_BUFFER = 8
 
-    SUPPORTS_CONCURRENT_SESSIONS: bool = True
 
-    _ACTIONS: List[ActionType] = [
-        "MONITOR",
-        "QUERY_LOGS",
-        "TRIAGE_ALERT",
-        "REQUEST_FORENSICS",
-        "OPEN_TICKET",
-        "EXECUTE_TICKET",
-        "ISOLATE_ASSET",
-        "REVOKE_IDENTITY",
-        "ROTATE_SECRET",
-        "BLOCK_EGRESS",
-        "PATCH_ASSET",
-    ]
+# ---------------------------------------------------------------------------
+# Internal mutable world state (kept private; not serialized to clients)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _WorldState:
+    scenario: Scenario
+    personality: AttackerPersonality
+    tick: int = 0
+    isolated_assets: Set[str] = field(default_factory=set)
+    revoked_identities: Set[str] = field(default_factory=set)
+    blocked_egress_assets: Set[str] = field(default_factory=set)
+    patched_assets: Set[str] = field(default_factory=set)
+    confirmed_compromised: Set[str] = field(default_factory=set)
+    alerts: List[AlertEvent] = field(default_factory=list)
+    forensics: List[ForensicResult] = field(default_factory=list)
+    cumulative_reward: float = 0.0
+    defender_acted_at_least_once: bool = False
+    done: bool = False
+    exfil_completed: bool = False
+    last_terminal_reason: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+
+
+class CybersecEnvironment(Environment[CybersecAction, CybersecObservation, CybersecState]):
+    """Long-horizon, partially observable enterprise defender environment.
+
+    The OpenEnv server wraps this class in HTTP/WebSocket endpoints; the
+    in-package :class:`cybersec.client.CybersecEnv` client is the canonical
+    way to drive it from Python.
+    """
+
+    SUPPORTS_CONCURRENT_SESSIONS = True
 
     def __init__(
         self,
-        scenario_id: str = "supply_chain_token_drift",
-        *,
-        seed: Optional[int] = None,
-        horizon: Optional[int] = None,
-        false_positive_rate: Optional[float] = None,
-    ):
-        self._scenario_id = scenario_id
-        self._default_seed = seed
-        self._override_horizon = horizon
-        self._override_false_positive_rate = false_positive_rate
-
-        self._state = State(episode_id=str(uuid4()), step_count=0)
-        self._rng = random.Random(seed)
-
-        self._world: Optional[WorldState] = None
+        default_scenario_id: Optional[str] = None,
+        default_personality: Optional[AttackerPersonality] = None,
+        reward_weights: Optional[RewardWeights] = None,
+    ) -> None:
+        super().__init__()
+        self._default_scenario_id = default_scenario_id
+        self._default_personality = default_personality
+        self._reward_model = RewardModel(reward_weights)
+        self._world: Optional[_WorldState] = None
+        self._attacker: Optional[ScriptedAttacker] = None
         self._telemetry: Optional[TelemetryEngine] = None
-        self._workflow: Optional[WorkflowEngine] = None
-        self._attacker: Optional[AttackerPolicy] = None
-        self._reward_model: Optional[RewardModel] = None
+        self._rng: Optional[random.Random] = None
+        self._attack_path_assets: Set[str] = set()
+        self._attack_path_identities: Set[str] = set()
+        self._compromisable_assets: Set[str] = set()
+        self._compromisable_identities: Set[str] = set()
 
-        self._horizon = 0
-        self._done = False
-        self._terminal_reason = ""
-
-        self._last_reward_breakdown: Dict[str, float] = {}
-        self._invalid_action: Optional[str] = None
-        self._step_events: List[str] = []
-        self._attacker_summary: Dict[str, Any] = {}
-
-    @classmethod
-    def scenario_ids(cls) -> tuple[str, ...]:
-        return list_scenarios()
+    # -------------------------------------------------------------- reset
 
     def reset(
         self,
         seed: Optional[int] = None,
         episode_id: Optional[str] = None,
-        scenario_id: Optional[str] = None,
-        horizon: Optional[int] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> CybersecObservation:
-        del kwargs
+        rng_seed = 0 if seed is None else int(seed)
+        self._rng = random.Random(rng_seed)
 
-        chosen_scenario_id = scenario_id or self._scenario_id
-        scenario = get_scenario(chosen_scenario_id)
-        self._scenario_id = chosen_scenario_id
+        scenario_id = kwargs.get("scenario_id") or self._default_scenario_id
+        if scenario_id is None:
+            ids = list_scenarios()
+            scenario_id = ids[rng_seed % len(ids)]
+        scenario = get_scenario(scenario_id)
 
-        effective_seed = seed
-        if effective_seed is None:
-            effective_seed = self._default_seed
-        if effective_seed is None:
-            effective_seed = random.SystemRandom().randint(1, 10_000_000)
+        personality_arg = kwargs.get("attacker_personality") or self._default_personality
+        if personality_arg is None:
+            personality = self._rng.choice(list(AttackerPersonality))
+        elif isinstance(personality_arg, AttackerPersonality):
+            personality = personality_arg
+        else:
+            personality = AttackerPersonality(personality_arg)
 
-        self._rng = random.Random(effective_seed)
+        self._attacker = ScriptedAttacker(scenario, personality, self._rng)
+        self._telemetry = TelemetryEngine(scenario, self._rng)
+        self._world = _WorldState(scenario=scenario, personality=personality)
 
-        self._world = WorldState.from_scenario(scenario)
-        self._workflow = WorkflowEngine(rng=self._rng)
-
-        false_positive_rate = (
-            scenario.false_positive_rate
-            if self._override_false_positive_rate is None
-            else self._override_false_positive_rate
-        )
-        self._telemetry = TelemetryEngine(
-            rng=self._rng,
-            false_positive_rate=false_positive_rate,
-            max_alerts=scenario.max_alerts,
-        )
-        self._attacker = AttackerPolicy(scenario=scenario, rng=self._rng)
-
-        self._horizon = horizon or self._override_horizon or scenario.horizon
-        self._reward_model = RewardModel(horizon=self._horizon)
-
-        self._state = State(episode_id=episode_id or str(uuid4()), step_count=0)
-        self._done = False
-        self._terminal_reason = ""
-        self._invalid_action = None
-        self._step_events = [
-            f"Scenario initialized: {scenario.scenario_id}",
-            f"Objective: {scenario.objective}",
-        ]
-        self._last_reward_breakdown = {
-            "detection": 0.0,
-            "containment": 0.0,
-            "business_continuity": 1.0,
-            "governance": 1.0,
-            "efficiency": 1.0,
-            "disruption_penalty": 0.0,
-            "governance_penalty": 0.0,
-            "efficiency_penalty": 0.0,
-            "adversary_pressure": 0.0,
-            "terminal_outcome": 0.0,
-            "false_positive_penalty": 0.0,
-            "invalid_action_penalty": 0.0,
-            "total": 0.0,
+        self._attack_path_assets = {
+            stage.target_asset for stage in scenario.stages if stage.target_asset
+        }
+        self._attack_path_identities = {
+            stage.target_identity for stage in scenario.stages if stage.target_identity
+        }
+        self._compromisable_assets = {
+            stage.target_asset
+            for stage in scenario.stages
+            if stage.compromises_asset and stage.target_asset
+        }
+        self._compromisable_identities = {
+            stage.target_identity
+            for stage in scenario.stages
+            if stage.compromises_identity and stage.target_identity
         }
 
-        self._attacker_summary = self._attacker.campaign_summary()
+        return self._build_observation(reward_breakdown=None, terminal_info=None)
 
-        return self._build_observation(
-            reward=None,
-            done=False,
-            info={
-                "phase": "initial",
-                "scenario_id": scenario.scenario_id,
-                "scenario_title": scenario.title,
-                "seed": effective_seed,
-                "horizon": self._horizon,
-                "available_actions": list(self._ACTIONS),
-                "step_contract": "observation_reward_done_info",
-            },
-        )
+    # -------------------------------------------------------------- step
 
     def step(
         self,
         action: CybersecAction,
         timeout_s: Optional[float] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> CybersecObservation:
-        del timeout_s, kwargs
+        if self._world is None or self._attacker is None or self._telemetry is None:
+            raise RuntimeError("step() called before reset()")
+        world = self._world
+        if world.done:
+            raise RuntimeError("step() called on a terminated episode; call reset()")
 
-        if (
-            self._world is None
-            or self._telemetry is None
-            or self._workflow is None
-            or self._attacker is None
-            or self._reward_model is None
-        ):
-            obs = self.reset()
-            obs.info = {
-                **obs.info,
-                "invalid_action": "step_called_before_reset_action_ignored",
-                "last_action_error": "step_called_before_reset_action_ignored",
-            }
-            return obs
+        world.tick += 1
+        signals = StepSignals(total_stage_count=len(world.scenario.stages))
 
-        if self._done:
-            return self._build_observation(
-                reward=0.0,
-                done=True,
-                info={
-                    "phase": "terminal",
-                    "terminal_reason": self._terminal_reason,
-                    "invalid_action": "episode_already_terminated_call_reset",
-                    "last_action_error": "episode_already_terminated_call_reset",
-                    "available_actions": [],
-                    "reward_breakdown": self._last_reward_breakdown,
-                },
-            )
+        invalid, validation_msg = self._validate_action(action)
+        if invalid:
+            signals.invalid_action_count = 1
+            applied_forensic: Optional[ForensicResult] = None
+        else:
+            applied_forensic, fp_count, was_containment = self._apply_defender_action(action, signals)
+            signals.false_positive_count += fp_count
+            if was_containment:
+                signals.containment_action_count = 1
+            if action.action_type is not ActionType.MONITOR:
+                world.defender_acted_at_least_once = True
 
-        self._state.step_count += 1
-        self._world.tick = self._state.step_count
-        self._invalid_action = None
-        self._step_events = []
+        if applied_forensic is not None:
+            world.forensics.append(applied_forensic)
+            world.forensics = world.forensics[-_FORENSIC_BUFFER:]
+            if (
+                applied_forensic.is_compromised
+                and applied_forensic.confidence >= 0.6
+                and applied_forensic.target not in world.confirmed_compromised
+                and self._target_actually_compromised(
+                    applied_forensic.target, applied_forensic.target_kind
+                )
+            ):
+                world.confirmed_compromised.add(applied_forensic.target)
+                signals.new_confirmed_compromised.add(applied_forensic.target)
 
-        signals = StepSignals()
-        self._apply_defender_action(action=action, signals=signals)
-
-        workflow_updates = self._workflow.update(
-            tick=self._world.tick,
-            evidence_by_target=dict(self._world.entity_evidence),
+        defender_view = DefenderView(
+            isolated_assets=set(world.isolated_assets),
+            revoked_identities=set(world.revoked_identities),
+            blocked_egress_assets=set(world.blocked_egress_assets),
+            patched_assets=set(world.patched_assets),
+            defender_acted_this_tick=action.action_type is not ActionType.MONITOR
+            and not invalid,
         )
-        if workflow_updates:
-            self._step_events.extend(update.message for update in workflow_updates)
+        ev: AttackerEvent = self._attacker.step(world.tick, defender_view)
 
-        attacker_event = self._attacker.progress(self._world)
-        self._attacker_summary = self._attacker.campaign_summary()
-        self._handle_attacker_event(attacker_event=attacker_event, signals=signals)
+        for alert in ev.surfaced_alerts:
+            world.alerts.append(alert)
+        world.alerts.extend(self._telemetry.background_alerts(world.tick))
+        world.alerts = world.alerts[-_ALERT_BUFFER:]
 
-        alerts_from_attack = self._telemetry.ingest_attacker_event(
-            attacker_event,
-            tick=self._world.tick,
-            world=self._world,
-        )
-        noise_alerts = self._telemetry.maybe_emit_background_noise(
-            tick=self._world.tick
-        )
+        signals.contained_active_stage_ids.update(ev.blocked_active)
+        signals.contained_preemptive_stage_ids.update(ev.blocked_preemptive)
+        if ev.exfil_completed:
+            signals.exfil_completed = True
 
-        if alerts_from_attack:
-            self._step_events.append(
-                f"{len(alerts_from_attack)} attacker-correlated alert(s) generated"
-            )
-        if noise_alerts:
-            self._step_events.append(
-                f"{len(noise_alerts)} background anomaly alert(s) generated"
-            )
+        active_count, weighted = self._disruption_load()
+        signals.active_control_count = active_count
+        signals.weighted_disruption = weighted
 
-        forensics_updates = self._telemetry.collect_ready_forensics(
-            tick=self._world.tick,
-            world=self._world,
-        )
-        if forensics_updates:
-            self._step_events.append(
-                f"{len(forensics_updates)} forensics job(s) completed"
-            )
+        terminate_reason: Optional[str] = None
+        if ev.exfil_completed:
+            terminate_reason = "exfil_completed"
+        elif world.tick >= world.scenario.horizon:
+            terminate_reason = "horizon_reached"
+        elif self._attacker.is_done():
+            terminate_reason = "attacker_done"
+        signals.is_terminal = terminate_reason is not None
+        signals.succeeded_stage_count = len(self._attacker.succeeded_stage_ids())
+        signals.defender_acted_at_least_once = world.defender_acted_at_least_once
 
-        done = (
-            self._state.step_count >= self._horizon
-            or self._world.exfiltration_succeeded
-        )
-        if done:
-            self._done = True
-            self._terminal_reason = (
-                "adversary_exfiltration"
-                if self._world.exfiltration_succeeded
-                else "horizon_reached"
-            )
+        reward = self._reward_model.step_reward(signals)
+        world.cumulative_reward += reward.total
 
-        reward, breakdown = self._reward_model.step_reward(
-            world=self._world,
-            signals=signals,
-            done=done,
-        )
-        self._last_reward_breakdown = breakdown
+        terminal_info: Optional[Dict[str, Any]] = None
+        if terminate_reason is not None:
+            world.done = True
+            world.exfil_completed = ev.exfil_completed
+            world.last_terminal_reason = terminate_reason
+            terminal_info = self._build_terminal_info(terminate_reason)
+            terminal_info["validation_msg"] = validation_msg
 
-        for event in self._step_events:
-            self._world.add_activity(event)
+        return self._build_observation(reward_breakdown=reward, terminal_info=terminal_info,
+                                       validation_msg=validation_msg)
 
-        info = self._build_info(
-            reward_breakdown=breakdown,
-            done=done,
-            workflow_updates=workflow_updates,
-            forensics_updates=forensics_updates,
-            attacker_event=attacker_event,
-        )
-
-        return self._build_observation(reward=reward, done=done, info=info)
+    # -------------------------------------------------------------- state
 
     @property
-    def state(self) -> State:
-        scenario_id = self._world.scenario.scenario_id if self._world else None
-        risk_score = self._world.enterprise_risk_score() if self._world else 0.0
-        return State(
-            episode_id=self._state.episode_id,
-            step_count=self._state.step_count,
-            done=self._done,
-            scenario_id=scenario_id,
-            horizon=self._horizon,
-            enterprise_risk_score=risk_score,
-            terminal_reason=self._terminal_reason,
+    def state(self) -> CybersecState:
+        if self._world is None:
+            return CybersecState()
+        w = self._world
+        return CybersecState(
+            scenario_id=w.scenario.scenario_id,
+            attacker_personality=w.personality,
+            tick=w.tick,
+            horizon=w.scenario.horizon,
+            completed_attack_stages=self._attacker.succeeded_stage_ids() if self._attacker else [],
+            cumulative_reward=round(w.cumulative_reward, 4),
+            done=w.done,
         )
 
-    def get_metadata(self) -> EnvironmentMetadata:
-        return EnvironmentMetadata(
-            name="cybersec-long-horizon-enterprise-defense",
-            description=(
-                "Long-horizon, partially observable enterprise incident response"
-                " environment with adaptive attacker dynamics and workflow-gated"
-                " defender controls."
-            ),
-            version="1.0.0",
-            author="cybersec_env",
-            documentation_url="https://github.com/meta-pytorch/OpenEnv",
-        )
+    # ====================================================================== helpers
+
+    def _validate_action(self, action: CybersecAction) -> tuple[bool, str]:
+        """Return ``(is_invalid, message)``. Pydantic guarantees structural
+        fields; this layer enforces the *live* valid_targets gate.
+        """
+
+        if self._world is None:
+            return True, "world not initialized"
+        scenario = self._world.scenario
+        asset_ids = {a.asset_id for a in scenario.assets}
+        identity_ids = {i.identity_id for i in scenario.identities}
+
+        atype = action.action_type
+        target = action.target
+        if atype is ActionType.MONITOR:
+            return False, "ok"
+        if atype is ActionType.INVESTIGATE:
+            if target in asset_ids or target in identity_ids:
+                return False, "ok"
+            return True, f"investigate target {target!r} is not a known asset or identity"
+        if atype in (ActionType.ISOLATE_ASSET, ActionType.BLOCK_EGRESS, ActionType.PATCH_ASSET):
+            if target in asset_ids:
+                return False, "ok"
+            return True, f"{atype.value} requires a known asset target, got {target!r}"
+        if atype is ActionType.REVOKE_IDENTITY:
+            if target in identity_ids:
+                return False, "ok"
+            return True, f"REVOKE_IDENTITY requires a known identity target, got {target!r}"
+        return True, f"unsupported action_type {atype!r}"
 
     def _apply_defender_action(
-        self, *, action: CybersecAction, signals: StepSignals
-    ) -> None:
-        assert self._world is not None
+        self, action: CybersecAction, signals: StepSignals
+    ) -> tuple[Optional[ForensicResult], int, bool]:
+        """Mutate world state for a validated action.
+
+        Returns ``(forensic_result_if_any, false_positive_count_added,
+        is_containment_action)``. The boolean is True iff the action is one of
+        the four containment verbs (ISOLATE / REVOKE / BLOCK / PATCH); the
+        reward model uses it to apply a small per-action containment cost so
+        that spamming containment isn't free.
+        """
+
+        assert self._world is not None and self._attacker is not None
         assert self._telemetry is not None
-        assert self._workflow is not None
+        world = self._world
+        atype = action.action_type
+        target = action.target
 
-        action_type = action.action_type
+        if atype is ActionType.MONITOR:
+            return None, 0, False
 
-        if action_type == "MONITOR":
-            signals.efficiency_cost += 0.01
-            self._step_events.append("SOC remained in monitor mode")
-            return
-
-        if action_type == "QUERY_LOGS":
-            source = action.parameter or ""
-            gain = self._apply_log_query(source=source)
-            signals.detection_gain += gain
-            signals.efficiency_cost += 0.03
-            self._step_events.append(
-                f"Queried {source} logs and improved evidence discovery"
-            )
-            return
-
-        if action_type == "TRIAGE_ALERT":
-            alert_id = action.target or ""
-            ok, message = self._telemetry.triage_alert(alert_id, world=self._world)
-            if not ok:
-                self._set_invalid(message, signals=signals, penalty=0.08)
-                return
-            alert = self._telemetry.get_alert(alert_id)
-            if alert and alert.true_positive:
-                signals.detection_gain += 0.12 + 0.10 * alert.confidence
-            elif alert:
-                signals.false_positive_penalty += 0.04
-            signals.efficiency_cost += 0.02
-            self._step_events.append(message)
-            return
-
-        if action_type == "REQUEST_FORENSICS":
-            target = action.target or ""
-            target_type = self._world.target_type(target)
-            if target_type is None:
-                self._set_invalid(
-                    f"Unknown forensics target '{target}'",
-                    signals=signals,
-                    penalty=0.10,
-                )
-                return
-            pending_targets = set(self._telemetry.pending_forensics_targets())
-            if target in pending_targets:
-                self._set_invalid(
-                    f"Forensics job already pending for '{target}'",
-                    signals=signals,
-                    penalty=0.04,
-                )
-                return
-            job = self._telemetry.create_forensics_job(
+        if atype is ActionType.INVESTIGATE:
+            kind = "asset" if target in {a.asset_id for a in world.scenario.assets} else "identity"
+            forensic = self._telemetry.investigate(
+                tick=world.tick,
                 target=target,
-                target_type=target_type,
-                tick=self._world.tick,
-                world=self._world,
+                target_kind=kind,
+                truly_compromised_assets=self._attacker.compromised_assets,
+                truly_compromised_identities=self._attacker.compromised_identities,
             )
-            signals.efficiency_cost += 0.06
-            self._step_events.append(
-                f"Forensics requested on {target}; job {job.job_id} ready at step {job.ready_step}"
-            )
-            return
+            return forensic, 0, False
 
-        if action_type == "OPEN_TICKET":
-            target = action.target or ""
-            requested_action = action.parameter or ""
-            if requested_action not in {
-                "ISOLATE_ASSET",
-                "REVOKE_IDENTITY",
-                "ROTATE_SECRET",
-                "BLOCK_EGRESS",
-                "PATCH_ASSET",
-            }:
-                self._set_invalid(
-                    "OPEN_TICKET parameter must be a control action",
-                    signals=signals,
-                    penalty=0.10,
-                )
-                return
-            if self._world.target_type(target) is None:
-                self._set_invalid(
-                    f"Ticket target '{target}' not found",
-                    signals=signals,
-                    penalty=0.08,
-                )
-                return
-            evidence = self._world.evidence_for(target)
-            ticket = self._workflow.open_ticket(
-                tick=self._world.tick,
-                requested_action=requested_action,
-                target=target,
-                urgency=action.urgency,
-                target_evidence=evidence,
-            )
-            signals.governance_cost += 0.03
-            signals.efficiency_cost += 0.04
-            self._step_events.append(
-                f"Opened ticket {ticket.ticket_id} for {requested_action} on {target}"
-            )
-            return
+        is_attack_path = target in self._attack_path_assets or target in self._attack_path_identities
+        false_positive = 0
+        if not is_attack_path:
+            false_positive = 1
 
-        if action_type == "EXECUTE_TICKET":
-            ticket_id = action.target or ""
-            ticket = self._workflow.get_ticket(ticket_id)
-            if ticket is None:
-                self._set_invalid(
-                    f"Ticket '{ticket_id}' not found",
-                    signals=signals,
-                    penalty=0.10,
-                )
-                return
-            if ticket.status != "ready":
-                self._set_invalid(
-                    f"Ticket {ticket_id} not executable in status '{ticket.status}'",
-                    signals=signals,
-                    penalty=0.08,
-                )
-                return
-            result = self._world.apply_control(
-                action_type=ticket.requested_action,
-                target=ticket.target,
-                tick=self._world.tick,
-                via_ticket=True,
-            )
-            self._workflow.mark_executed(ticket_id, note=result.message)
-            self._apply_control_signals(result=result, signals=signals)
-            self._step_events.append(
-                f"Executed ticket {ticket.ticket_id}: {result.message}"
-            )
-            return
+        if atype is ActionType.ISOLATE_ASSET:
+            world.isolated_assets.add(target)
+        elif atype is ActionType.REVOKE_IDENTITY:
+            world.revoked_identities.add(target)
+        elif atype is ActionType.BLOCK_EGRESS:
+            world.blocked_egress_assets.add(target)
+        elif atype is ActionType.PATCH_ASSET:
+            world.patched_assets.add(target)
 
-        # Direct controls (governance penalty if executed outside workflow)
-        target = action.target or ""
-        result = self._world.apply_control(
-            action_type=action_type,  # type: ignore[arg-type]
-            target=target,
-            tick=self._world.tick,
-            via_ticket=False,
-        )
-        if not result.success:
-            self._set_invalid(result.message, signals=signals, penalty=0.08)
-            return
+        return None, false_positive, True
 
-        self._apply_control_signals(result=result, signals=signals)
-        signals.governance_cost += 0.08
-        self._step_events.append(
-            f"Executed direct control {action_type} on {target} (bypassed workflow)"
-        )
+    def _target_actually_compromised(self, target: str, kind: str) -> bool:
+        if self._attacker is None:
+            return False
+        if kind == "asset":
+            return target in self._attacker.compromised_assets
+        if kind == "identity":
+            return target in self._attacker.compromised_identities
+        return False
 
-    def _apply_log_query(self, *, source: LogSource) -> float:
+    def _disruption_load(self) -> tuple[int, float]:
+        """Return ``(active_count, criticality-weighted disruption score)``."""
+
         assert self._world is not None
-        source_weights = {
-            "identity": 0.12,
-            "endpoint": 0.10,
-            "network": 0.13,
-            "code": 0.11,
-            "cloud": 0.14,
-            "ticketing": 0.07,
-        }
-        weight = source_weights.get(source, 0.08)
+        w = self._world
+        scenario = w.scenario
+        asset_lookup = {a.asset_id: a for a in scenario.assets}
+        identity_lookup = {i.identity_id: i for i in scenario.identities}
+        weighted = 0.0
+        count = 0
+        for asset_id in w.isolated_assets:
+            count += 1
+            asset = asset_lookup.get(asset_id)
+            weighted += asset.criticality if asset else 0.5
+        for asset_id in w.blocked_egress_assets:
+            count += 1
+            asset = asset_lookup.get(asset_id)
+            weighted += 0.4 * (asset.criticality if asset else 0.5)
+        for identity_id in w.revoked_identities:
+            count += 1
+            identity = identity_lookup.get(identity_id)
+            weighted += 0.3 * (identity.privilege if identity else 0.5)
+        return count, weighted
 
-        gain = 0.0
-        for asset in self._world.assets.values():
-            if asset.compromised and not self._world.is_asset_contained(asset.asset_id):
-                delta = weight * 0.45
-                current = self._world.evidence_for(asset.asset_id)
-                updated = self._world.adjust_evidence(asset.asset_id, delta)
-                gain += max(0.0, updated - current)
-        for identity in self._world.identities.values():
-            if identity.compromised and not self._world.is_identity_contained(
-                identity.identity_id
-            ):
-                delta = weight * 0.40
-                current = self._world.evidence_for(identity.identity_id)
-                updated = self._world.adjust_evidence(identity.identity_id, delta)
-                gain += max(0.0, updated - current)
-        return min(0.30, gain)
-
-    def _apply_control_signals(
-        self, *, result: ControlApplication, signals: StepSignals
-    ) -> None:
-        signals.containment_gain += result.containment_gain
-        signals.disruption_cost += result.disruption_cost
-        if result.target_was_compromised:
-            self._world.register_discovery(result.target)
-            signals.detection_gain += 0.10
-        if result.via_ticket:
-            signals.governance_cost += 0.01
-
-    def _handle_attacker_event(
-        self, *, attacker_event: AttackerEvent, signals: StepSignals
-    ) -> None:
-        assert self._world is not None
-        if attacker_event.attempted:
-            signals.adversary_progress_delta += attacker_event.progress_delta
-            self._step_events.append(attacker_event.description)
-            if attacker_event.blocked:
-                signals.containment_gain += 0.08
-        else:
-            self._step_events.append(attacker_event.description)
-
-    def _set_invalid(
-        self, message: str, *, signals: StepSignals, penalty: float
-    ) -> None:
-        self._invalid_action = message
-        signals.invalid_action_penalty += penalty
-        self._step_events.append(message)
-
-    def _build_info(
-        self,
-        *,
-        reward_breakdown: Dict[str, float],
-        done: bool,
-        workflow_updates: List[Any],
-        forensics_updates: List[ForensicsJob],
-        attacker_event: AttackerEvent,
-    ) -> Dict[str, Any]:
-        assert self._world is not None
-        assert self._reward_model is not None
-
-        info: Dict[str, Any] = {
-            "phase": "terminal" if done else "running",
-            "scenario_id": self._world.scenario.scenario_id,
-            "scenario_title": self._world.scenario.title,
-            "available_actions": list(self._ACTIONS) if not done else [],
-            "reward_breakdown": reward_breakdown,
-            "enterprise_risk_score": self._world.enterprise_risk_score(),
-            "attacker_summary": self._attacker_summary,
-            "attacker_event": {
-                "attempted": attacker_event.attempted,
-                "success": attacker_event.success,
-                "blocked": attacker_event.blocked,
-                "path_id": attacker_event.path_id,
-                "step_id": attacker_event.step_id,
-                "stage": attacker_event.stage,
-                "target": attacker_event.target,
-                "source": attacker_event.source,
-                "exfiltration_succeeded": attacker_event.exfiltration_succeeded,
-            },
-            "workflow_updates": [asdict(update) for update in workflow_updates],
-            "forensics_updates": [
-                {
-                    "job_id": job.job_id,
-                    "target": job.target,
-                    "target_type": job.target_type,
-                    "status": "completed",
-                    "finding": job.finding,
-                    "confidence": job.confidence,
-                }
-                for job in forensics_updates
-            ],
-            "events": self._world.get_recent_activity(limit=12),
-            "step_contract": "observation_reward_done_info",
+    def _build_terminal_info(self, reason: str) -> Dict[str, Any]:
+        assert self._world is not None and self._attacker is not None
+        w = self._world
+        return {
+            "terminal_reason": reason,
+            "succeeded_stage_ids": self._attacker.succeeded_stage_ids(),
+            "stages_succeeded": len(self._attacker.succeeded_stage_ids()),
+            "stages_total": len(w.scenario.stages),
+            "exfil_completed": w.exfil_completed,
+            "cumulative_reward": round(w.cumulative_reward, 4),
+            "scenario_id": w.scenario.scenario_id,
+            "attacker_personality": w.personality.value,
+            "tick": w.tick,
+            "horizon": w.scenario.horizon,
         }
 
-        if self._invalid_action is not None:
-            info["invalid_action"] = self._invalid_action
-            info["last_action_error"] = self._invalid_action
-
-        if done:
-            terminal_score = self._reward_model.terminal_score(self._world)
-            info["terminal_reason"] = self._terminal_reason
-            info["grader_score"] = terminal_score
-            info["grader_success"] = self._reward_model.grader_success(self._world)
-
-        return info
+    # -------------------------------------------------------------- observation
 
     def _build_observation(
         self,
-        *,
-        reward: Optional[float],
-        done: bool,
-        info: Dict[str, Any],
+        reward_breakdown,
+        terminal_info: Optional[Dict[str, Any]] = None,
+        validation_msg: str = "ok",
     ) -> CybersecObservation:
         assert self._world is not None
-        assert self._telemetry is not None
-        assert self._workflow is not None
+        w = self._world
 
-        alerts = [
-            SecurityAlert(
-                alert_id=alert.alert_id,
-                source=alert.source,
-                severity=alert.severity,
-                confidence=alert.confidence,
-                entity=alert.entity,
-                title=alert.title,
-                triage_status=alert.triage_status,
-            )
-            for alert in self._telemetry.list_alerts()
-        ]
-        open_tickets = [
-            self._ticket_to_model(ticket) for ticket in self._workflow.visible_tickets()
-        ]
-
-        forensics_updates = [
-            ForensicsUpdate(
-                job_id=entry["job_id"],
-                target=entry["target"],
-                target_type=entry["target_type"],
-                status=entry["status"],
-                finding=entry["finding"],
-                confidence=entry["confidence"],
-            )
-            for entry in info.get("forensics_updates", [])
-        ]
-
-        reward_breakdown = CybersecRewardBreakdown(
-            detection=self._last_reward_breakdown.get("detection", 0.0),
-            containment=self._last_reward_breakdown.get("containment", 0.0),
-            business_continuity=self._last_reward_breakdown.get(
-                "business_continuity", 0.0
-            ),
-            governance=self._last_reward_breakdown.get("governance", 0.0),
-            efficiency=self._last_reward_breakdown.get("efficiency", 0.0),
-            disruption_penalty=self._last_reward_breakdown.get(
-                "disruption_penalty", 0.0
-            ),
-            governance_penalty=self._last_reward_breakdown.get(
-                "governance_penalty", 0.0
-            ),
-            efficiency_penalty=self._last_reward_breakdown.get(
-                "efficiency_penalty", 0.0
-            ),
-            adversary_pressure=self._last_reward_breakdown.get(
-                "adversary_pressure", 0.0
-            ),
-            terminal_outcome=self._last_reward_breakdown.get("terminal_outcome", 0.0),
-            false_positive_penalty=self._last_reward_breakdown.get(
-                "false_positive_penalty", 0.0
-            ),
-            invalid_action_penalty=self._last_reward_breakdown.get(
-                "invalid_action_penalty", 0.0
-            ),
-            total=self._last_reward_breakdown.get("total", 0.0),
-        )
-
-        info = {
-            **info,
-            "reward_breakdown": reward_breakdown.model_dump(),
+        valid_targets = {
+            "assets": [a.asset_id for a in w.scenario.assets],
+            "identities": [i.identity_id for i in w.scenario.identities],
         }
+        info: Dict[str, Any] = {"validation_msg": validation_msg}
+        if reward_breakdown is not None:
+            info["reward_breakdown"] = reward_breakdown.model_dump()
+            info["cumulative_reward"] = round(w.cumulative_reward, 4)
+        if terminal_info is not None:
+            info["terminal"] = terminal_info
 
-        return CybersecObservation(
-            scenario_id=self._world.scenario.scenario_id,
-            scenario_title=self._world.scenario.title,
-            scenario_objective=self._world.scenario.objective,
-            tick=self._state.step_count,
-            horizon=self._horizon,
-            enterprise_risk_score=self._world.enterprise_risk_score(),
-            alerts=alerts,
-            open_tickets=open_tickets,
-            ticket_updates=[
-                update.get("message", "") for update in info.get("workflow_updates", [])
-            ],
-            forensics_updates=forensics_updates,
-            known_compromised_assets=sorted(self._world.known_compromised_assets),
-            known_compromised_identities=sorted(
-                self._world.known_compromised_identities
-            ),
-            recent_activity=self._world.get_recent_activity(limit=12),
-            available_actions=list(self._ACTIONS) if not done else [],
-            valid_targets=self._build_valid_targets(done=done),
-            reward=reward,
-            done=done,
+        obs = CybersecObservation(
+            tick=w.tick,
+            horizon=w.scenario.horizon,
+            scenario_id=w.scenario.scenario_id,
+            attacker_personality=w.personality,
+            alerts=list(w.alerts),
+            forensics=list(w.forensics),
+            isolated_assets=sorted(w.isolated_assets),
+            revoked_identities=sorted(w.revoked_identities),
+            blocked_egress_assets=sorted(w.blocked_egress_assets),
+            patched_assets=sorted(w.patched_assets),
+            confirmed_compromised=sorted(w.confirmed_compromised),
+            valid_targets=valid_targets,
+            available_actions=list(ActionType),
             info=info,
+            done=w.done,
+            reward=reward_breakdown.total if reward_breakdown is not None else None,
         )
+        return obs
 
-    def _build_valid_targets(self, *, done: bool) -> Dict[str, List[str]]:
-        if done or self._world is None or self._workflow is None:
-            return {}
-        targets = self._world.target_catalog()
-        targets["alert_ids"] = (
-            [alert.alert_id for alert in self._telemetry.list_alerts()]
-            if self._telemetry
-            else []
-        )
-        targets["ticket_ids"] = [
-            ticket.ticket_id for ticket in self._workflow.visible_tickets()
-        ]
-        targets["ready_ticket_ids"] = list(self._workflow.ready_ticket_ids())
-        targets["pending_forensics_targets"] = list(
-            sorted(set(self._telemetry.pending_forensics_targets()))
-        )
-        targets["query_log_sources"] = [
-            "identity",
-            "endpoint",
-            "network",
-            "code",
-            "cloud",
-            "ticketing",
-        ]
-        targets["ticketable_actions"] = [
-            "ISOLATE_ASSET",
-            "REVOKE_IDENTITY",
-            "ROTATE_SECRET",
-            "BLOCK_EGRESS",
-            "PATCH_ASSET",
-        ]
-        return targets
 
-    @staticmethod
-    def _ticket_to_model(ticket: TicketRecord) -> WorkflowTicket:
-        return WorkflowTicket(
-            ticket_id=ticket.ticket_id,
-            requested_action=ticket.requested_action,
-            target=ticket.target,
-            status=ticket.status,
-            urgency=ticket.urgency,
-            created_step=ticket.created_step,
-            review_due_step=ticket.review_due_step,
-            execute_ready_step=ticket.execute_ready_step,
-        )
+__all__ = ["CybersecEnvironment"]

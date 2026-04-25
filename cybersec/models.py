@@ -1,211 +1,252 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
+"""Pydantic data models for the Cybersec environment.
 
-"""Data models for CybersecEnv enterprise campaign simulation."""
+This module defines the public contract between the environment, agents,
+and any downstream training/evaluation code. All field names and types are
+stable; downstream tooling (the LLM prompt formatter, the reward shaping in
+training scripts, the heuristic baseline) reads these classes directly.
+"""
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
-from openenv.core.env_server.types import Action, Observation
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-ActionType = Literal[
-    "MONITOR",
-    "QUERY_LOGS",
-    "TRIAGE_ALERT",
-    "REQUEST_FORENSICS",
-    "OPEN_TICKET",
-    "EXECUTE_TICKET",
-    "ISOLATE_ASSET",
-    "REVOKE_IDENTITY",
-    "ROTATE_SECRET",
-    "BLOCK_EGRESS",
-    "PATCH_ASSET",
-]
-
-TicketActionType = Literal[
-    "ISOLATE_ASSET",
-    "REVOKE_IDENTITY",
-    "ROTATE_SECRET",
-    "BLOCK_EGRESS",
-    "PATCH_ASSET",
-]
-
-LogSourceType = Literal[
-    "identity",
-    "endpoint",
-    "network",
-    "code",
-    "cloud",
-    "ticketing",
-]
-
-UrgencyType = Literal["low", "normal", "high"]
+from openenv.core.env_server.types import Action, Observation, State
 
 
-class SecurityAlert(BaseModel):
-    """Agent-facing alert representation generated from noisy telemetry."""
-
-    alert_id: str
-    source: str
-    severity: Literal["low", "medium", "high", "critical"]
-    confidence: float = Field(..., ge=0.0, le=1.0)
-    entity: str
-    title: str
-    triage_status: Literal["pending", "triaged"]
+# ---------------------------------------------------------------------------
+# Enums
+# ---------------------------------------------------------------------------
 
 
-class WorkflowTicket(BaseModel):
-    """Visible incident-response workflow ticket."""
+class ActionType(str, Enum):
+    """The six defender actions exposed to the policy.
 
-    ticket_id: str
-    requested_action: TicketActionType
-    target: str
-    status: Literal[
-        "pending_review",
-        "approved_waiting",
-        "ready",
-        "rejected",
-        "executed",
-    ]
-    urgency: UrgencyType
-    created_step: int = Field(..., ge=0)
-    review_due_step: int = Field(..., ge=0)
-    execute_ready_step: Optional[int] = Field(default=None, ge=0)
+    The action surface is intentionally small so a 1.5B-parameter LLM can
+    reliably emit valid JSON and reason about target selection.
+    """
+
+    MONITOR = "MONITOR"
+    INVESTIGATE = "INVESTIGATE"
+    ISOLATE_ASSET = "ISOLATE_ASSET"
+    REVOKE_IDENTITY = "REVOKE_IDENTITY"
+    BLOCK_EGRESS = "BLOCK_EGRESS"
+    PATCH_ASSET = "PATCH_ASSET"
 
 
-class ForensicsUpdate(BaseModel):
-    """Visible update from asynchronous forensics jobs."""
+class AttackerPersonality(str, Enum):
+    """Three scripted attacker archetypes sampled per episode."""
 
-    job_id: str
-    target: str
-    target_type: Literal["asset", "identity"]
-    status: Literal["queued", "completed"]
-    finding: str
-    confidence: float = Field(..., ge=0.0, le=1.0)
+    STEALTHY = "stealthy"
+    AGGRESSIVE = "aggressive"
+    OPPORTUNISTIC = "opportunistic"
 
 
-class CybersecRewardBreakdown(BaseModel):
-    """Reward decomposition for diagnostics and judging explainability."""
+class AlertSignal(str, Enum):
+    """Coarse signal type attached to every alert.
 
-    detection: float
-    containment: float
-    business_continuity: float
-    governance: float
-    efficiency: float
-    disruption_penalty: float
-    governance_penalty: float
-    efficiency_penalty: float
-    adversary_pressure: float
-    terminal_outcome: float
-    false_positive_penalty: float
-    invalid_action_penalty: float
-    total: float
+    Real SOCs surface dozens of signal kinds; we keep five buckets so the
+    policy can learn distinct response patterns without combinatorial blow-up.
+    """
+
+    AUTH_ANOMALY = "auth_anomaly"
+    LATERAL_MOVEMENT = "lateral_movement"
+    DATA_STAGING = "data_staging"
+    EGRESS_ANOMALY = "egress_anomaly"
+    BACKGROUND_NOISE = "background_noise"
+
+
+# ---------------------------------------------------------------------------
+# Public data records (used inside Observation)
+# ---------------------------------------------------------------------------
+
+
+class AlertEvent(BaseModel):
+    """One alert visible to the defender at a given tick.
+
+    Alerts are produced by the telemetry engine. Real adversary actions
+    surface as alerts only after a stochastic detection delay; benign
+    background noise also produces alerts. Severity is the only signal the
+    defender has to discriminate the two.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tick: int = Field(..., description="Tick at which the alert became visible")
+    signal: AlertSignal = Field(..., description="Coarse signal category")
+    asset: Optional[str] = Field(default=None, description="Asset implicated, if any")
+    identity: Optional[str] = Field(default=None, description="Identity implicated, if any")
+    severity: float = Field(..., ge=0.0, le=1.0, description="0..1 confidence proxy")
+    description: str = Field(default="", description="Short human-readable hint")
+
+
+class ForensicResult(BaseModel):
+    """Outcome of an INVESTIGATE action.
+
+    Forensics return a noisy ground-truth signal: confidence rises with the
+    asset/identity actually being on the active attack path, but it is never
+    exactly 1.0 to keep the defender from blindly trusting one query.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tick: int = Field(..., description="Tick the investigation completed")
+    target: str = Field(..., description="Asset or identity that was investigated")
+    target_kind: str = Field(..., description="'asset' or 'identity'")
+    is_compromised: bool = Field(..., description="Investigator's verdict")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence in the verdict")
+
+
+class RewardBreakdown(BaseModel):
+    """Per-step reward decomposition exposed for analysis and reward shaping."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    detection: float = 0.0
+    containment: float = 0.0
+    false_positive_penalty: float = 0.0
+    disruption_penalty: float = 0.0
+    invalid_action_penalty: float = 0.0
+    terminal_score: float = 0.0
+    total: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Action
+# ---------------------------------------------------------------------------
 
 
 class CybersecAction(Action):
-    """Structured action for long-horizon enterprise incident handling."""
+    """Defender action.
 
-    action_type: ActionType = Field(..., description="Defender operation to execute")
-    target: Optional[str] = Field(
-        default=None,
-        description="Entity target (asset, identity, alert_id, ticket_id)",
-    )
-    parameter: Optional[str] = Field(
-        default=None,
-        description=(
-            "Auxiliary parameter. Used as log source for QUERY_LOGS, or"
-            " requested control action for OPEN_TICKET."
-        ),
-    )
-    urgency: UrgencyType = Field(
-        default="normal",
-        description="Workflow urgency for OPEN_TICKET requests",
-    )
+    All six action types take at most a single string ``target``; this keeps
+    the JSON the policy must emit minimal:
+
+        {"action_type": "ISOLATE_ASSET", "target": "asset-web-01"}
+
+    Validation rules (enforced server-side):
+      * MONITOR forbids a target.
+      * INVESTIGATE requires a target (asset or identity).
+      * ISOLATE_ASSET / BLOCK_EGRESS / PATCH_ASSET require an asset target.
+      * REVOKE_IDENTITY requires an identity target.
+
+    Cross-checking the target against the live ``valid_targets`` dictionary
+    in the observation is the environment's responsibility, not Pydantic's.
+    """
+
+    action_type: ActionType = Field(..., description="One of the six action verbs")
+    target: Optional[str] = Field(default=None, description="Asset or identity id")
 
     @model_validator(mode="after")
-    def validate_action_contract(self) -> "CybersecAction":
-        no_target_actions = {"MONITOR"}
-        target_only_actions = {
-            "TRIAGE_ALERT",
-            "REQUEST_FORENSICS",
-            "EXECUTE_TICKET",
-            "ISOLATE_ASSET",
-            "REVOKE_IDENTITY",
-            "ROTATE_SECRET",
-            "BLOCK_EGRESS",
-            "PATCH_ASSET",
+    def _check_target_presence(self) -> "CybersecAction":
+        requires_target = {
+            ActionType.INVESTIGATE,
+            ActionType.ISOLATE_ASSET,
+            ActionType.REVOKE_IDENTITY,
+            ActionType.BLOCK_EGRESS,
+            ActionType.PATCH_ASSET,
         }
-
-        if self.action_type in no_target_actions:
-            if self.target is not None or self.parameter is not None:
-                raise ValueError(
-                    f"{self.action_type} does not accept target or parameter"
-                )
-            return self
-
-        if self.action_type == "QUERY_LOGS":
-            if self.target is not None:
-                raise ValueError("QUERY_LOGS does not accept target")
-            if self.parameter is None:
-                raise ValueError("QUERY_LOGS requires parameter=log_source")
-            if self.parameter not in {
-                "identity",
-                "endpoint",
-                "network",
-                "code",
-                "cloud",
-                "ticketing",
-            }:
-                raise ValueError("QUERY_LOGS parameter must be a supported log source")
-            return self
-
-        if self.action_type == "OPEN_TICKET":
-            if self.target is None:
-                raise ValueError("OPEN_TICKET requires target")
-            if self.parameter not in {
-                "ISOLATE_ASSET",
-                "REVOKE_IDENTITY",
-                "ROTATE_SECRET",
-                "BLOCK_EGRESS",
-                "PATCH_ASSET",
-            }:
-                raise ValueError("OPEN_TICKET requires parameter=ticketable action")
-            return self
-
-        if self.action_type in target_only_actions:
-            if self.target is None:
-                raise ValueError(f"{self.action_type} requires target")
-            if self.parameter is not None:
-                raise ValueError(f"{self.action_type} does not use parameter")
-            return self
-
+        if self.action_type in requires_target and not self.target:
+            raise ValueError(f"{self.action_type.value} requires a non-empty target")
+        if self.action_type is ActionType.MONITOR and self.target:
+            raise ValueError("MONITOR must not be given a target")
         return self
 
 
-class CybersecObservation(Observation):
-    """Observation for partially observable enterprise defense campaigns."""
+# ---------------------------------------------------------------------------
+# Observation
+# ---------------------------------------------------------------------------
 
-    scenario_id: str
-    scenario_title: str
-    scenario_objective: str
-    tick: int = Field(..., ge=0)
-    horizon: int = Field(..., ge=1)
-    enterprise_risk_score: float = Field(..., ge=0.0, le=1.0)
-    alerts: List[SecurityAlert] = Field(default_factory=list)
-    open_tickets: List[WorkflowTicket] = Field(default_factory=list)
-    ticket_updates: List[str] = Field(default_factory=list)
-    forensics_updates: List[ForensicsUpdate] = Field(default_factory=list)
-    known_compromised_assets: List[str] = Field(default_factory=list)
-    known_compromised_identities: List[str] = Field(default_factory=list)
-    recent_activity: List[str] = Field(default_factory=list)
-    available_actions: List[ActionType] = Field(default_factory=list)
-    valid_targets: Dict[str, List[str]] = Field(default_factory=dict)
+
+class CybersecObservation(Observation):
+    """Defender's view of the world at a single tick.
+
+    Fields are partitioned into:
+
+      * Episode meta: tick / horizon / scenario_id / attacker_personality.
+      * Telemetry: ``alerts`` (recent, lag-delayed) and ``forensics`` (responses
+        to past INVESTIGATE actions).
+      * Defender controls: which assets/identities are isolated, revoked,
+        blocked, patched, or have been confirmed compromised.
+      * Action grounding: ``available_actions`` and ``valid_targets`` so the
+        policy can be hard-constrained to the legal action space.
+      * ``info``: free-form dict carrying ``reward_breakdown`` every step and
+        ``terminal`` info on the final tick.
+    """
+
+    tick: int = Field(..., description="Current tick (0-indexed)")
+    horizon: int = Field(..., description="Maximum number of ticks in the episode")
+
+    scenario_id: str = Field(..., description="Active scenario identifier")
+    attacker_personality: AttackerPersonality = Field(
+        ..., description="Sampled attacker archetype for this episode"
+    )
+
+    alerts: List[AlertEvent] = Field(
+        default_factory=list,
+        description="Alerts visible to the defender (most recent last)",
+    )
+    forensics: List[ForensicResult] = Field(
+        default_factory=list,
+        description="Investigation results received so far",
+    )
+
+    isolated_assets: List[str] = Field(default_factory=list)
+    revoked_identities: List[str] = Field(default_factory=list)
+    blocked_egress_assets: List[str] = Field(default_factory=list)
+    patched_assets: List[str] = Field(default_factory=list)
+    confirmed_compromised: List[str] = Field(
+        default_factory=list,
+        description="Targets the defender has positively identified as compromised",
+    )
+
+    valid_targets: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="{'assets': [...], 'identities': [...]} - canonical legal targets",
+    )
+    available_actions: List[ActionType] = Field(
+        default_factory=list,
+        description="Action verbs currently legal (filtered by remaining cooldowns/etc.)",
+    )
+
     info: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Machine-readable info channel for diagnostics and evaluation",
+        description="Per-step diagnostics: reward_breakdown, terminal stats, debug",
     )
+
+
+# ---------------------------------------------------------------------------
+# State (server-side only; never returned to clients verbatim)
+# ---------------------------------------------------------------------------
+
+
+class CybersecState(State):
+    """Coarse state snapshot for debugging / GET /state.
+
+    Intentionally lightweight: the full ground-truth WorldState lives in
+    ``cybersec.server.cybersec_environment`` and is kept private. Only fields
+    safe to expose on the OpenEnv state endpoint live here.
+    """
+
+    scenario_id: Optional[str] = None
+    attacker_personality: Optional[AttackerPersonality] = None
+    tick: int = 0
+    horizon: int = 0
+    completed_attack_stages: List[str] = Field(default_factory=list)
+    cumulative_reward: float = 0.0
+    done: bool = False
+
+
+__all__ = [
+    "ActionType",
+    "AttackerPersonality",
+    "AlertSignal",
+    "AlertEvent",
+    "ForensicResult",
+    "RewardBreakdown",
+    "CybersecAction",
+    "CybersecObservation",
+    "CybersecState",
+]

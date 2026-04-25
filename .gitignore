@@ -1,10 +1,34 @@
+# Reference docs (PDFs / personal notes) - kept out of the published package.
 idea.txt
 *.pdf
+
+# Python build / cache / venv
+.venv/
+**/.venv/
+**/*.egg-info/
 **/__pycache__/
 **/*.pyc
 **/.pytest_cache/
 **/.ruff_cache/
-cybersec/outputs/evals/*.json
-cybersec/outputs/evals/*.csv
-cybersec/outputs/evals/*.md
-cybersec/outputs/logs/*.log
+**/.mypy_cache/
+build/
+dist/
+
+# Windows weirdness: a literal `nul` file can appear and is hard to delete.
+nul
+**/nul
+
+# Notebook outputs / artifacts (we want clean diffs in version control)
+notebooks/**/.ipynb_checkpoints/
+notebooks/**/_outputs/
+notebooks/**/_artifacts/
+notebooks/**/_checkpoints/
+
+# Eval artifacts produced by run_episode batches
+outputs/
+eval_logs/
+
+# Local environment / credentials
+.env
+.env.*
+api.txt

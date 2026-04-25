@@ -1,134 +1,44 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
+"""Async + sync client for talking to the Cybersec environment server.
 
-"""Cybersec Environment Client."""
+The class is the same shape as every other OpenEnv environment: subclass
+:class:`openenv.core.env_client.EnvClient`, implement ``_step_payload`` and
+``_parse_result``, and inherit transport from the base class.
 
-from typing import Any, Dict, List
+The async client is the canonical entry point. Get a sync wrapper via
+``CybersecEnv(...).sync()`` if you don't want to write ``await`` everywhere.
+"""
 
-from openenv.core import EnvClient
+from __future__ import annotations
+
+from typing import Any, Dict
+
 from openenv.core.client_types import StepResult
-from openenv.core.env_server.types import State
+from openenv.core.env_client import EnvClient
 
-try:
-    from .models import (
-        CybersecAction,
-        CybersecObservation,
-        ForensicsUpdate,
-        SecurityAlert,
-        WorkflowTicket,
-    )
-except ImportError:
-    from models import (
-        CybersecAction,
-        CybersecObservation,
-        ForensicsUpdate,
-        SecurityAlert,
-        WorkflowTicket,
-    )
+from .models import CybersecAction, CybersecObservation, CybersecState
 
 
-class CybersecEnv(EnvClient[CybersecAction, CybersecObservation, State]):
-    """Client for long-horizon enterprise cyber defense environment."""
+class CybersecEnv(EnvClient[CybersecAction, CybersecObservation, CybersecState]):
+    """Persistent-session client for :class:`CybersecEnvironment`."""
 
     def _step_payload(self, action: CybersecAction) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
-            "action_type": action.action_type,
-            "urgency": action.urgency,
-        }
-        if action.target is not None:
-            payload["target"] = action.target
-        if action.parameter is not None:
-            payload["parameter"] = action.parameter
-        if action.metadata:
-            payload["metadata"] = action.metadata
-        return payload
+        return action.model_dump(mode="json")
 
     def _parse_result(self, payload: Dict[str, Any]) -> StepResult[CybersecObservation]:
-        obs_data = payload.get("observation", {}) or {}
+        # The WebSocket protocol echoes the same shape as the HTTP responses:
+        # ``{"observation": {...}, "reward": ..., "done": ...}``. Pull the
+        # inner observation, but fall back to ``payload`` itself for robustness
+        # if a future server version returns the observation directly.
+        obs_payload = payload.get("observation", payload)
+        observation = CybersecObservation.model_validate(obs_payload)
+        reward = payload.get("reward", observation.reward)
+        done = bool(payload.get("done", observation.done))
+        return StepResult(observation=observation, reward=reward, done=done)
 
-        alerts: List[SecurityAlert] = []
-        for alert in obs_data.get("alerts", []) or []:
-            alerts.append(
-                SecurityAlert(
-                    alert_id=alert.get("alert_id", ""),
-                    source=alert.get("source", "endpoint"),
-                    severity=alert.get("severity", "low"),
-                    confidence=float(alert.get("confidence", 0.0)),
-                    entity=alert.get("entity", ""),
-                    title=alert.get("title", ""),
-                    triage_status=alert.get("triage_status", "pending"),
-                )
-            )
+    def _parse_state(self, payload: Dict[str, Any]) -> CybersecState:
+        # ``GET /state`` (and the WebSocket ``state`` request) ship the raw
+        # state dict; it is *not* nested under another key.
+        return CybersecState.model_validate(payload)
 
-        open_tickets: List[WorkflowTicket] = []
-        for ticket in obs_data.get("open_tickets", []) or []:
-            open_tickets.append(
-                WorkflowTicket(
-                    ticket_id=ticket.get("ticket_id", ""),
-                    requested_action=ticket.get("requested_action", "ISOLATE_ASSET"),
-                    target=ticket.get("target", ""),
-                    status=ticket.get("status", "pending_review"),
-                    urgency=ticket.get("urgency", "normal"),
-                    created_step=int(ticket.get("created_step", 0)),
-                    review_due_step=int(ticket.get("review_due_step", 0)),
-                    execute_ready_step=ticket.get("execute_ready_step"),
-                )
-            )
 
-        forensics_updates: List[ForensicsUpdate] = []
-        for update in obs_data.get("forensics_updates", []) or []:
-            forensics_updates.append(
-                ForensicsUpdate(
-                    job_id=update.get("job_id", ""),
-                    target=update.get("target", ""),
-                    target_type=update.get("target_type", "asset"),
-                    status=update.get("status", "queued"),
-                    finding=update.get("finding", ""),
-                    confidence=float(update.get("confidence", 0.0)),
-                )
-            )
-
-        observation = CybersecObservation(
-            scenario_id=obs_data.get("scenario_id", ""),
-            scenario_title=obs_data.get("scenario_title", ""),
-            scenario_objective=obs_data.get("scenario_objective", ""),
-            tick=int(obs_data.get("tick", 0)),
-            horizon=int(obs_data.get("horizon", 1)),
-            enterprise_risk_score=float(obs_data.get("enterprise_risk_score", 0.0)),
-            alerts=alerts,
-            open_tickets=open_tickets,
-            ticket_updates=list(obs_data.get("ticket_updates", []) or []),
-            forensics_updates=forensics_updates,
-            known_compromised_assets=list(
-                obs_data.get("known_compromised_assets", []) or []
-            ),
-            known_compromised_identities=list(
-                obs_data.get("known_compromised_identities", []) or []
-            ),
-            recent_activity=list(obs_data.get("recent_activity", []) or []),
-            available_actions=list(obs_data.get("available_actions", []) or []),
-            valid_targets=dict(obs_data.get("valid_targets", {}) or {}),
-            done=payload.get("done", False),
-            reward=payload.get("reward"),
-            info=dict(obs_data.get("info", {}) or {}),
-        )
-
-        return StepResult(
-            observation=observation,
-            reward=payload.get("reward"),
-            done=payload.get("done", False),
-        )
-
-    def _parse_state(self, payload: Dict[str, Any]) -> State:
-        return State(
-            episode_id=payload.get("episode_id"),
-            step_count=int(payload.get("step_count", 0)),
-            done=bool(payload.get("done", False)),
-            scenario_id=payload.get("scenario_id"),
-            horizon=payload.get("horizon"),
-            enterprise_risk_score=payload.get("enterprise_risk_score"),
-            terminal_reason=payload.get("terminal_reason"),
-        )
+__all__ = ["CybersecEnv"]
