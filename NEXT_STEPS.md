@@ -1,4 +1,4 @@
-# Cybersec OpenEnv — next-step playbook (iter-3)
+# Cybersec OpenEnv — next-step playbook (iter-4)
 
 **Audience:** an LLM agent picking up where the Sonnet/Opus session left
 off. You do **not** need the prior chat history. Scan section 0 for a
@@ -12,22 +12,31 @@ TL;DR, then walk the sections in order. There's a separate
 * The env is a **long-horizon multi-agent cybersec OpenEnv** with three
   training scenarios and one **held-out OOD scenario**. Live at
   <https://lonelyguyse1-cybersec.hf.space> (`Lonelyguyse1/cybersec`).
-* Iter-1 mode-collapsed (`std_return = 0` on 2/3 scenarios).
-  Iter-2 added anti-collapse rewards, OOD scenario, canary tests.
-  **Iter-3 (this commit)** rewrote the notebook so baseline + post-train
-  evaluation actually go over the OpenEnv WebSocket protocol against the
-  deployed HF Space, the way a hackathon judge will see it.
-* **Final submission scope** = the `cybersec/` directory only
-  (`pyproject.toml`, `Dockerfile`, `openenv.yaml`, package source). The
-  notebook is shipped as the single training script the judges run in
-  their own Colab/Kaggle. `tests/`, `.scripts/`, `notebooks/`,
-  `NEXT_STEPS.md`, `USER_GUIDE.md`, `_artifacts/` are developer-only and
-  are stripped before submission. They are gitignored or fenced behind
-  a clean `cybersec/`-only export.
-* **Compute**: the user has no Colab Pro this week. Use **Kaggle GPU
-  notebooks** + remaining **HF credits**. Notebook is runtime-aware
-  (Colab vs Kaggle vs local) so swap is one-line. Switching back to
-  Colab Pro is fine; nothing in the code changes.
+* **Iteration history (one-line each):**
+  * **iter-1**: collapsed (`std_return = 0` on 2/3 scenarios).
+  * **iter-2**: added anti-collapse rewards, OOD scenario, canary tests.
+  * **iter-3**: rewrote the notebook so baseline + post-train evaluation
+    go over the OpenEnv WebSocket protocol against the deployed HF
+    Space. **Result**: iter-3 still showed `std_return = 0` on 2 of 3
+    train scenarios; the canary passed only because one scenario had
+    variance.
+  * **iter-4 (this commit)**: added `reward_batch_action_entropy`
+    (gradient OUT of collapse, not just a barrier preventing entry);
+    bumped `num_generations` 4→6, `temperature` 1.0→1.2, KL `beta`
+    0→0.04, `lr` 5e-6→3e-6. Tightened the std=0 canary to require
+    ≥2/3 train scenarios to have variance. Added
+    `monitor_fallback_rate` metric on every `EpisodeResult` to expose
+    LLM-parse-fallback steps that iter-3's `invalid_rate=0.0` was
+    hiding. Added `train.py` at repo root as the single
+    canonical headless entrypoint (mirrors the notebook 1:1).
+* **Final submission scope** = the `cybersec/` directory plus
+  `train.py` and `notebooks/cybersec_grpo.ipynb`. `tests/`, `.scripts/`,
+  `_artifacts/`, `*.pdf`, `idea.txt`, `api.txt`, `NEXT_STEPS.md`,
+  `USER_GUIDE.md` are developer-only and are stripped before submission.
+* **Compute**: the user has no Colab Pro. Use **Kaggle GPU
+  notebooks** + remaining **HF credits**. Both `train.py` and the
+  notebook are runtime-aware (Colab/Kaggle/local). Switching back to
+  Colab Pro later requires no code changes.
 * **Space hardware constraint**: judge-locked at **2 vCPU / 8 GB**. No
   CPU upgrade. The env occupies <200 MB even at 8 concurrent envs
   (verified by `.scripts/memory_probe.py`), so this is fine.
@@ -53,22 +62,23 @@ cybersec_env/
 │   │   ├── cybersec_environment.py   # CybersecEnvironment (the MDP)
 │   │   ├── Dockerfile                # HF Space build
 │   │   └── requirements.txt
-│   ├── training/                     # NEW iter-2: TRL-shaped reward funcs
+│   ├── training/                     # NEW iter-2; iter-4 added reward_batch_action_entropy
 │   │   ├── __init__.py
-│   │   └── rewards.py                # 8 reward funcs + helpers
+│   │   └── rewards.py                # 9 TRL-shaped reward funcs + helpers
 │   ├── pyproject.toml                # packaged distribution metadata
 │   ├── openenv.yaml, uv.lock         # OpenEnv scaffolding
 │   ├── py.typed                      # PEP 561 marker
 │   └── README.md                     # the canonical / Space card README
+├── train.py                          # ← THE headless training superscript (iter-4)
 ├── notebooks/
-│   └── cybersec_grpo.ipynb           # ← THE notebook (41 cells, iter-3 remote-env)
-├── tests/                            # 70+ pytest tests; not in submission
+│   └── cybersec_grpo.ipynb           # ← same pipeline, click-through UX (iter-4)
+├── tests/                            # 73 pytest tests; not in submission
 │   ├── conftest.py
 │   ├── test_action_validation.py
 │   ├── test_env_contract.py
 │   ├── test_scenarios.py
 │   ├── test_training_rewards.py
-│   └── test_reward_hack_canaries.py  # iter-2 alarm
+│   └── test_reward_hack_canaries.py  # iter-2/iter-4 alarms (mode-collapse + monitor_fallback)
 ├── .scripts/                         # operator helpers; gitignored, not in submission
 │   ├── build_unified_notebook.py     # author the notebook from plain Python
 │   ├── push_bypass.py                # `openenv push` w/o whoami rate limit
@@ -142,51 +152,53 @@ within the judge's 2 vCPU / 8 GB Space constraint.
 
 ---
 
-## 3. Run the iter-3 training
+## 3. Run the iter-4 training
 
-### 3.1 Open the notebook
+### 3.1 Two equivalent entry points — pick one
 
-The notebook auto-detects Colab / Kaggle / local. The same Run-All
-works on all three.
+| UX                           | Command                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **Headless (recommended)**   | `python train.py` from a Kaggle/Colab notebook cell after `git clone`. Single command, end-to-end.                                  |
+| **Click-through notebook**   | Open `notebooks/cybersec_grpo.ipynb` on Kaggle/Colab → GPU runtime → Run All. Identical pipeline, visible cell-by-cell.              |
 
-| Runtime          | How to open                                                                                               |
-| ---------------- | --------------------------------------------------------------------------------------------------------- |
-| **Kaggle GPU**   | Upload `notebooks/cybersec_grpo.ipynb` to a new Kaggle Notebook → set Accelerator = GPU P100 → Run All. |
-| **Colab (free)** | <https://colab.research.google.com/github/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo.ipynb> → T4 → Run All. |
-| Local (rare)     | `jupyter lab notebooks/cybersec_grpo.ipynb`. You won't have a GPU; only the non-training cells will work. |
+Both auto-detect Colab/Kaggle/local and write artifacts under
+`<workdir>/_artifacts/`. Both go over the OpenEnv WebSocket protocol
+to the deployed HF Space for baseline + post-train eval.
 
-### 3.2 What happens at runtime
+### 3.2 Pipeline (same for `train.py` and the notebook)
 
-1. **Cells 1–3**: detect runtime, install `cybersec` package straight
-   from the HF Space (the canonical source — no GitHub clone), install
-   GRPO stack.
-2. **Cells 4–5**: imports + `MODE` config + `probe_space()` health
-   check that fails fast if the Space is asleep.
-3. **Cells 6–9 — Baseline against the live HF Space**: 30 episodes/
-   scenario × 4 scenarios × 2 policies = 240 episodes over WebSocket.
-   ~28 min wall-clock. **This is the cell where the judge sees the
-   OpenEnv API working.**
-4. **Cells 10–14 — Local dataset build + GRPO training**: 1500-prompt
-   dataset, 100 GRPO steps × 4 generations, 8 reward functions.
-   ~25 min on T4.
-5. **Cells 18–22 — Post-train eval against the live HF Space**:
-   30 episodes × 4 scenarios × 1 policy = 120 episodes. The trained
-   adapter is reloaded via Unsloth (must be Unsloth, not vanilla
-   transformers, because of the fused-QKV LoRA) and connected through
-   the same SyncEnvClient transport used in section 3. ~10 min.
-6. **Cells 23–28**: before/after curves, summary table, sanity asserts.
+1. **probe** — `GET /health` and `/schema` against the live Space; fail
+   fast if asleep or on a stale action surface.
+2. **baseline** — 30 episodes × 4 scenarios × 2 policies = 240
+   WebSocket episodes. ~25 min wall-clock.
+3. **dataset build (LOCAL)** — 1500-prompt dataset with pickled
+   env snapshots. The GRPO reward `reward_step_total` clones each
+   snapshot to score candidate completions; the WebSocket client owns
+   a live socket so isn't picklable. ~2 min.
+4. **GRPO training** — Unsloth-loaded Qwen2.5-1.5B-Instruct, 4-bit
+   QLoRA, **120 steps × 6 generations/prompt** at `temperature=1.2`,
+   `beta=0.04`, `lr=3e-6` (iter-4 defaults), 9 reward functions.
+   ~30–35 min on T4/P100.
+5. **post-train eval** — 30 episodes × 4 scenarios over the live HF
+   Space, with the adapter reloaded via Unsloth. ~10 min.
+6. **persist + canaries** — before/after curves, summary table,
+   training_diagnostics.png, sanity asserts.
 
-### 3.3 What "good" looks like
+### 3.3 What "good" looks like (iter-4 thresholds)
 
-* `summary_table.md`: `std_return > 0.1` on at least one **training**
-  scenario for `trained-llm`. (Iter-1 was 0 everywhere — that's the
-  collapse signal.)
+* `summary_table.md`: `std_return > 0.1` on **≥ 2 of the 3 training
+  scenarios** for `trained-llm`. The new canary refuses to ship runs
+  that meet the old "any one scenario" bar but stay collapsed on the
+  others.
+* `monitor_fallback_rate` ≤ 0.5 in every row of `summary_table.md`.
+  If a row shows e.g. 0.9 the model is mostly emitting unparseable
+  text and being saved by the MONITOR fallback in `llm_act`.
 * `before_after_curves.png`: trained policy at-or-above heuristic on
-  ≥ 1 train scenario, within 5 points on the others.
-* `training_diagnostics.png`: `reward_action_diversity` > `1 /
-  num_generations` (i.e. > 0.25) for at least the first 30 steps.
-* Held-out (`cloud_metadata_ssrf`): not required to win, but
-  `mean_return` should not be > 5 points below random.
+  ≥ 1 train scenario AND on the held-out `cloud_metadata_ssrf`
+  (the "did it actually generalise?" panel).
+* `training_diagnostics.png`: `reward_batch_action_entropy` non-flat
+  for the whole run — this is the iter-4 signal that the policy is
+  exploring out of collapse rather than freezing.
 
 ---
 
@@ -202,20 +214,29 @@ works on all three.
   `FastLanguageModel.from_pretrained(ADAPTER_DIR, ...)`, **not**
   `transformers.AutoModelForCausalLM`. Re-check the cell source.
 
-### 4.2 Mode collapse (`std_return == 0`) re-appears
+### 4.2 Mode collapse re-appears in iter-4 (≥2 scenarios still `std=0`)
 
-This is iter-1's pathology. The iter-3 sanity assert catches it.
+The iter-4 canary requires ≥2/3 train scenarios to have `std_return > 0.1`.
+If it fires, the order of escalation is:
 
 1. Open `_artifacts/training_diagnostics.png`. If
-   `reward_action_diversity` is pinned at `1/num_generations`, the
-   policy collapsed. If KL is also near 0, the model never moved —
-   bump LR (`5e-6` → `1e-5`).
-2. Bump `MODE["grpo_num_generations"]` from 4 to 6 or 8 — more
-   candidates per prompt → more diverse gradients.
-3. In `GRPOConfig`, set `temperature=1.2` and add `beta=0.05` (KL
-   coefficient).
+   `reward_batch_action_entropy` is pinned at 0, the whole training
+   batch is producing identical actions — bump exploration:
+   ```bash
+   python train.py --grpo-num-generations 8 --grpo-temperature 1.4
+   ```
+2. If KL stays near 0 throughout training, the model never moved.
+   Raise `--grpo-learning-rate 5e-6` (back to iter-3 defaults) AND
+   keep `--grpo-beta 0.06` so it doesn't run away.
+3. If `reward_action_diversity` is pinned at `1/num_generations` even
+   though `reward_batch_action_entropy` is non-zero, every group is
+   coherent but groups differ from each other. Bump
+   `--grpo-num-generations 8` so individual groups have more room to
+   diverge.
 4. Last resort: down-weight `reward_step_total` by wrapping it in a
-   factor of 0.5. The env reward is the strongest collapse pressure.
+   factor of 0.5 inside `cybersec/training/rewards.py`. The env reward
+   is the strongest collapse pressure once a scenario admits a canned
+   plan; cutting its weight halves that pull.
 
 ### 4.3 Held-out scenario tanks
 
@@ -321,8 +342,9 @@ Treat the rest as developer scaffolding.
 
 **Always commit:**
 - `cybersec/**` — the env package
-- `notebooks/cybersec_grpo.ipynb` — the train+eval script
-- `tests/**` — 70+ pytest tests
+- `train.py` — the headless training superscript (iter-4)
+- `notebooks/cybersec_grpo.ipynb` — same pipeline, click-through UX
+- `tests/**` — 73 pytest tests
 - `README.md` (root pointer), `NEXT_STEPS.md`, `USER_GUIDE.md`
 - `.gitignore`
 
@@ -375,12 +397,14 @@ notebook's headline-delta print. Add to `cybersec/README.md` under a
 
 ---
 
-## 9. What the previous (Sonnet/Opus) session left in flight
+## 9. What the previous (Opus 4.7) session left in flight
 
 If anything is checked off when you start, skip it.
 
 * [x] `openenv validate cybersec` passes; layout matches `openenv init`.
-* [x] HF Space deployed and serving the iter-3 6-action surface.
+* [x] HF Space deployed and serving the iter-3 6-action surface (still
+      valid for iter-4; the env code didn't change between iter-3 and
+      iter-4 except for `EpisodeResult.monitor_fallback_count`).
 * [x] All 4 scenarios available on the live Space (incl.
       `cloud_metadata_ssrf`).
 * [x] Memory probe verified: < 200 MB at 8 concurrent envs.
@@ -388,13 +412,31 @@ If anything is checked off when you start, skip it.
       live OpenEnv WebSocket protocol against the HF Space.
 * [x] Notebook auto-detects Colab / Kaggle / local for path & install.
 * [x] User-supervised step-by-step guide added (`USER_GUIDE.md`).
-* [ ] **Run cybersec_grpo.ipynb on Kaggle** and record results in
-      `_artifacts/`. Iter-2's results were never preserved because the
-      Colab quota ran out mid-run.
-* [ ] **If the run produces good results** (mode collapse broken,
-      headline delta positive on at least one train scenario), enable
-      `PUSH_ARTIFACTS = True` in the last cell to upload `_artifacts/`
-      to the Space, and add screenshots to `cybersec/README.md`.
+* [x] **iter-4 reward stack landed**: `reward_batch_action_entropy`
+      added; `EpisodeResult.monitor_fallback_count` plumbed through
+      both local and remote runners; `monitor_fallback_rate` exposed
+      in `aggregate_results` and the summary table.
+* [x] **iter-4 GRPO defaults** (num_generations=6, temperature=1.2,
+      beta=0.04, lr=3e-6) applied to both `train.py` and the notebook.
+* [x] **iter-4 canary** tightened to require ≥2/3 train scenarios to
+      have `std_return > 0.1`, plus a new `monitor_fallback_rate ≤ 0.5`
+      gate.
+* [x] `train.py` superscript at repo root mirrors the notebook; smoke-
+      tested in baseline-only mode against both local and the live
+      HF Space.
+* [x] All 73 pytest tests pass.
+* [ ] **Push iter-4 to the HF Space** so judges using `git clone`
+      `Lonelyguyse1/cybersec` get the iter-4 `EpisodeResult` shape and
+      the new reward function. (The env's runtime behaviour is
+      identical, but the package they install needs to expose
+      `monitor_fallback_count` and `reward_batch_action_entropy`.)
+* [ ] **Run `python train.py` on Kaggle** end-to-end and record the
+      resulting `_artifacts/` (screenshots of `before_after_curves.png`
+      and `training_diagnostics.png` for the README).
+* [ ] **If the run produces good results** (≥2/3 train scenarios with
+      `std_return > 0.1`, headline delta positive on ≥1 train + held-
+      out scenario), update `cybersec/README.md` with the iter-4
+      result section and the two PNGs.
 
 ---
 
@@ -402,12 +444,13 @@ If anything is checked off when you start, skip it.
 
 Bundle the following into one prompt for the next premium-model session:
 
-1. The exact error / unexpected output. Include the cell number and
-   the last 30 lines of output.
+1. The exact error / unexpected output. Include the section name
+   (`[probe]`, `[baseline]`, `[train]`, ...) and last 40 lines of
+   output.
 2. `_artifacts/training_log.json` (last 20 entries) and
    `_artifacts/training_diagnostics.png`.
 3. `_artifacts/summary_table.md`.
-4. `git log --oneline -10` to show what changed since iter-3.
+4. `git log --oneline -10` to show what changed since iter-4.
 5. The output of `python -m pytest tests/ -q`.
 
 That gives the next session the entire state of the experiment without
@@ -415,7 +458,7 @@ re-reading the prior conversation.
 
 ---
 
-*Last updated: iter-3 (Sonnet 4.5 session, just before model rotation).
-The previous session's transcript is at the path the IDE reports as
+*Last updated: iter-4 (Opus 4.7 session). The previous session's
+transcript is at the path the IDE reports as
 `agent-transcripts/<uuid>.jsonl` — only consult it if this file is
 ambiguous, since it is very large.*

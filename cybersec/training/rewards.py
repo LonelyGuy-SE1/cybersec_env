@@ -445,6 +445,56 @@ def reward_observation_aware(
     return out
 
 
+def reward_batch_action_entropy(prompts, completions, **kw) -> List[float]:
+    """Iter-4: per-completion bonus proportional to its action's batch rarity.
+
+    ``reward_action_diversity`` is a *prevention* reward: once the policy
+    is fully collapsed all candidates within a group are identical, so each
+    candidate scores ``1/K`` and the relative reward GRPO uses is flat.
+    There is no gradient pushing OUT of collapse.
+
+    This reward looks across the *whole training batch* (every prompt's
+    candidates pooled together) and returns ``log(N / count_of_action)``,
+    clipped to ``[0, 1]``. When the policy is fully collapsed across the
+    whole batch, every completion scores ``log(1) = 0`` -- but the moment
+    *one* candidate breaks symmetry it gets a bonus, and every other
+    candidate's reward drops, creating a relative-reward gap that GRPO
+    can follow.
+
+    Combined with a temperature >= 1.2 and ``num_generations >= 6``, this
+    is what actually frees the policy from iter-3-style 2-out-of-3
+    deterministic collapse.
+    """
+
+    import math
+
+    n = len(completions)
+    if n == 0:
+        return []
+    actions: List[Optional[tuple]] = []
+    for c in completions:
+        a = parsed_action(c)
+        if a is None:
+            actions.append(None)
+        else:
+            actions.append((a.action_type.value, getattr(a, "target", None) or ""))
+    counts: dict[tuple, int] = {}
+    for a in actions:
+        if a is None:
+            continue
+        counts[a] = counts.get(a, 0) + 1
+    out: List[float] = []
+    for a in actions:
+        if a is None:
+            out.append(0.0)
+            continue
+        c = counts[a]
+        # log(n / c): n when c=1 (max bonus), 0 when c=n (full collapse)
+        v = math.log(max(1, n) / c) / math.log(max(2, n))
+        out.append(max(0.0, min(1.0, v)))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Canonical bundle
 # ---------------------------------------------------------------------------
@@ -454,9 +504,13 @@ def default_reward_funcs() -> List[Callable[..., List[float]]]:
     """Canonical reward function list used by the unified GRPO notebook.
 
     Order is stable so ``training_log.json`` columns line up across runs.
-    The first six entries are the original iter-1 task rewards; the last
-    two are iter-2 anti-collapse additions and can be removed for a pure
-    iter-1 reproduction.
+
+    Iter-2 added ``reward_action_diversity`` and ``reward_observation_aware``
+    as anti-collapse signals. Iter-3 results showed they were necessary
+    but not sufficient: the policy still collapsed on 2/3 train scenarios.
+    Iter-4 adds ``reward_batch_action_entropy``, a batch-wide entropy
+    bonus that gives a non-zero gradient OUT of collapse (the iter-2
+    rewards only prevented entry into collapse).
     """
 
     return [
@@ -468,6 +522,7 @@ def default_reward_funcs() -> List[Callable[..., List[float]]]:
         reward_avoids_exfil_path,
         reward_action_diversity,
         reward_observation_aware,
+        reward_batch_action_entropy,
     ]
 
 
@@ -480,6 +535,7 @@ __all__ = [
     "restore_env",
     "reward_action_diversity",
     "reward_avoids_exfil_path",
+    "reward_batch_action_entropy",
     "reward_json_valid",
     "reward_no_redundant_containment",
     "reward_observation_aware",

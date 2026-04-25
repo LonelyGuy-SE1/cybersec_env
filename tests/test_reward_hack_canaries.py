@@ -31,6 +31,7 @@ from cybersec import (
 from cybersec.baselines import RandomPolicy, run_episode
 from cybersec.training.rewards import (
     reward_action_diversity,
+    reward_batch_action_entropy,
     reward_observation_aware,
     reward_step_total,
     snapshot_env,
@@ -200,3 +201,62 @@ def test_canary_run_episode_invalid_action_count_is_observable():
     assert hasattr(res, "invalid_action_count")
     assert isinstance(res.invalid_action_count, int)
     assert res.invalid_action_count >= 0
+
+
+def test_canary_run_episode_exposes_monitor_fallback_count():
+    """Iter-4: ``EpisodeResult.monitor_fallback_count`` exists for honest reporting.
+
+    The iter-3 results showed ``invalid_rate=0.0`` for a trained LLM
+    policy that was actually MONITOR-fallbacking on most steps.
+    ``invalid_action_count`` only counts env-rejected actions, so a policy
+    that silently degrades to a legal MONITOR is invisible to it. This
+    canary locks in the new metric so future refactors cannot drop it.
+    """
+
+    env = CybersecEnvironment()
+    res = run_episode(
+        env, RandomPolicy(seed=0), seed=0, scenario_id="supply_chain_token_drift"
+    )
+    assert hasattr(res, "monitor_fallback_count")
+    assert isinstance(res.monitor_fallback_count, int)
+    assert res.monitor_fallback_count == 0  # RandomPolicy never falls back
+
+
+# ---------------------------------------------------------------------------
+# Iter-4: batch action entropy reward gives gradient OUT of collapse
+# ---------------------------------------------------------------------------
+
+
+def test_batch_action_entropy_zero_when_fully_collapsed():
+    """All identical actions across the whole batch -> 0.0 reward.
+
+    This is the ground state we are pushing the policy *out of*.
+    """
+
+    completion = '{"action_type": "ISOLATE_ASSET", "target": "secrets-vault"}'
+    out = reward_batch_action_entropy(
+        prompts=[f"p{i}" for i in range(8)],
+        completions=[completion] * 8,
+    )
+    assert out == [0.0] * 8
+
+
+def test_batch_action_entropy_rewards_breaking_symmetry():
+    """One unique completion among seven identical ones -> the unique one wins.
+
+    This is the property we need: there must be a *positive* relative
+    reward gap that GRPO can follow when a single candidate breaks
+    symmetry. Without it, no gradient pushes out of the collapsed mode.
+    """
+
+    canned = '{"action_type": "ISOLATE_ASSET", "target": "secrets-vault"}'
+    odd = '{"action_type": "REVOKE_IDENTITY", "target": "alice"}'
+    completions = [canned] * 7 + [odd]
+    out = reward_batch_action_entropy(
+        prompts=[f"p{i}" for i in range(len(completions))],
+        completions=completions,
+    )
+    assert out[-1] > out[0], (
+        f"unique completion ({out[-1]:.3f}) must outrank canned ones ({out[0]:.3f})"
+    )
+    assert all(0.0 <= v <= 1.0 for v in out)

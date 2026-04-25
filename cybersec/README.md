@@ -64,11 +64,20 @@ from the seed (or pinned via reset kwargs).
 
 ### Scenarios (`scenarios.py`)
 
+**Training scenarios:**
+
 | ID | Title | Stages | Horizon |
 |---|---|---|---|
 | `supply_chain_token_drift` | CI-token theft → poisoned artifact → payments pivot → warehouse exfil | 5 | 70 |
 | `federated_identity_takeover` | Spearphish → MFA fatigue → helpdesk pivot → HR portal → cloud-egress exfil | 5 | 70 |
 | `insider_repo_pivot` | Repo recon → secret harvest → staging → prod cluster → DB exfil | 6 | 80 |
+
+**Held-out (eval-only) scenario** — never seen during GRPO training; used to
+measure whether the trained policy *generalises* or just memorises:
+
+| ID | Title | Stages | Horizon |
+|---|---|---|---|
+| `cloud_metadata_ssrf` | SSRF → cloud metadata → assumed role → cloud storage exfil | 4 | 60 |
 
 Every stage is tagged with a MITRE tactic + technique (e.g. `T1552.004 Private Keys`,
 `T1621 MFA Request Generation`, `T1041 Exfiltration Over C2 Channel`).
@@ -143,22 +152,27 @@ cybersec/                              # the OpenEnv env folder (package root)
 ├── __init__.py                        # public surface re-exports
 ├── client.py                          # CybersecEnv (WebSocket client)
 ├── models.py                          # CybersecAction / Observation / State
-├── scenarios.py                       # 3 MITRE-aligned scenarios
+├── scenarios.py                       # 3 train + 1 held-out MITRE-aligned scenarios
 ├── attacker.py                        # ScriptedAttacker + 3 personalities
 ├── telemetry.py                       # Background noise + INVESTIGATE oracle
 ├── reward.py                          # 6-channel reward + terminal grader
-├── baselines.py                       # Random + Heuristic + run_episode
+├── baselines.py                       # Random + Heuristic + run_episode + EpisodeResult
 ├── py.typed
-└── server/
+├── server/
+│   ├── __init__.py
+│   ├── cybersec_environment.py        # CybersecEnvironment subclass
+│   ├── app.py                         # FastAPI app via openenv create_app()
+│   ├── Dockerfile                     # container image (HF Spaces build context)
+│   └── requirements.txt               # server-only runtime pins
+└── training/
     ├── __init__.py
-    ├── cybersec_environment.py        # CybersecEnvironment subclass
-    ├── app.py                         # FastAPI app via openenv create_app()
-    ├── Dockerfile                     # container image (HF Spaces build context)
-    └── requirements.txt               # server-only runtime pins
+    └── rewards.py                     # 9 TRL-compatible reward funcs + parsers
 ```
 
-The repo also ships `tests/` and `notebooks/` *outside* this folder — those
-are training infrastructure, not part of the env package itself.
+The repo also ships `train.py`, `tests/`, and `notebooks/` *outside* this
+folder — those are training/eval infrastructure, not part of the env package
+itself. Judges installing the package via `pip install` only ever see the
+`cybersec/` folder.
 
 ---
 
@@ -230,85 +244,127 @@ Docker image using `server/Dockerfile`, and uploads to a Spaces repo.
 
 ---
 
-## 5. Baselines (50 episodes per scenario)
+## 5. Baselines (30 episodes per scenario, against the live HF Space)
 
-Random and Heuristic are the two reference policies in `baselines.py`. Numbers
-below are from `pytest`-stable seeds 0-49 with `attacker_personality` sampled
-by RNG (so each cell averages over all three personalities):
+Random and Heuristic are the two reference policies in `baselines.py`. The
+numbers below come from running 30 seeds per scenario over the deployed
+HF Space WebSocket API (i.e. the same transport judges use):
 
 | Scenario                       | Random — return | Heuristic — return | Heuristic — exfil rate |
 |---|---|---|---|
-| `supply_chain_token_drift`     |  1.93           |  **2.20**          | 10%                    |
-| `federated_identity_takeover`  |  0.59           |  **2.55**          | 4%                     |
-| `insider_repo_pivot`           |  **3.09**       |  2.30              | 8%                     |
+| `supply_chain_token_drift`     |  3.34           |  **3.36**          | 13%                    |
+| `federated_identity_takeover`  | -1.10           |  **2.93**          | 7%                     |
+| `insider_repo_pivot`           |  **2.66**       | -2.69              | 7%                     |
+| `cloud_metadata_ssrf` (OOD)    |  1.45           |  **2.55**          | 0%                     |
+
+(Numbers above are the iter-3 measured baseline; they do not change in
+iter-4 since the env itself didn't change. Reproducible via
+`python train.py --baseline-only`.)
 
 Random's "win" on the insider scenario is exactly the kind of artifact we
 *want* a good reward function to reveal: random wins by burning the network
 down (~5 isolations in the first 8 ticks), and the heuristic refuses to do so
 because waiting for evidence is more legible defender behavior. The trained
 LLM defender's job is to land between them — surgical, evidence-driven
-containment.
+containment that beats heuristic on the held-out scenario.
 
 ---
 
 ## 6. Training story
 
-A single end-to-end notebook at [`../notebooks/cybersec_grpo.ipynb`](../notebooks/cybersec_grpo.ipynb)
-walks through the full RLVR training arc in one Run-All pass. The
-notebook installs the env package straight from the deployed HF Space
-(no GitHub clone), so the Space *is* the canonical source. Open it on
-Colab via the badge at the top, pick a T4 runtime, and let it go —
-roughly **45–60 min** of wall clock from cold install to before/after
-plots:
+There are two equivalent UX surfaces. Both run the same pipeline,
+write the same artifacts, and use the same reward functions —
+choose whichever your reviewer prefers:
 
-1. **Baseline** — `RandomPolicy` and `HeuristicPolicy` over 50 seeds × 3
+| Entry point | Best for |
+|---|---|
+| [`../train.py`](../train.py) | Headless GPU runs (`python train.py`). One command, end-to-end, fits in a tmux pane. |
+| [`../notebooks/cybersec_grpo.ipynb`](../notebooks/cybersec_grpo.ipynb) | Click-through Colab / Kaggle. Same code, but Run-All shows every step. |
+
+Both pull the env package straight from the deployed HF Space, so the
+Space *is* the canonical source — no GitHub clone required. Roughly
+**65-85 min** of wall clock from cold install to before/after plots on
+a free Colab T4 / Kaggle P100, at the iter-4 defaults below.
+
+**Pipeline:**
+
+1. **Baseline** — `RandomPolicy` + `HeuristicPolicy` over 30 seeds × 3
    training scenarios + 1 held-out OOD scenario (`cloud_metadata_ssrf`,
    never seen during training). Writes `_artifacts/baseline_metrics.json`
-   and the per-scenario reward-curve plot.
-2. **Dataset build** — ~1500 `(state-snapshot, prompt)` pairs harvested
-   from heuristic rollouts on the **training scenarios only**. Each
-   prompt is paired with a pickled `CybersecEnvironment`, so GRPO reward
-   functions can clone the env and score candidate actions against the
-   *real* environment dynamics — this is where the long-horizon
-   multi-agent surface enters training.
-3. **GRPO training** — Unsloth-loaded Qwen2.5-1.5B-Instruct, 4-bit
-   QLoRA, then TRL GRPO for **100 steps × 4 generations/prompt** scored
-   by **eight independent reward functions** living in
+   and the per-scenario reward-curve plot. Episodes go over the **OpenEnv
+   WebSocket protocol** to the deployed HF Space — same transport a judge
+   will use.
+2. **Dataset build** (local) — ~1500 `(state-snapshot, prompt)` pairs
+   harvested from heuristic rollouts on the **training scenarios only**.
+   Each prompt is paired with a pickled `CybersecEnvironment`, so GRPO
+   reward functions can clone the env and score candidate actions
+   against the *real* environment dynamics. This step is local because
+   `pickle` and a live WebSocket don't mix.
+3. **GRPO training** — Unsloth-loaded Qwen2.5-1.5B-Instruct, 4-bit QLoRA,
+   then TRL GRPO for **120 steps × 6 generations/prompt** at
+   `temperature=1.2`, `beta=0.04`, `lr=3e-6` (iter-4 defaults), scored
+   by **nine independent reward functions** in
    [`cybersec/training/rewards.py`](training/rewards.py):
    - 4 schema/validity rewards (JSON valid, schema valid, target in
      `valid_targets`, no redundant containment),
    - 1 actual env-step reward via cloned snapshot,
    - 1 exfil-path shaping prior,
-   - 2 **anti-collapse rewards** (`reward_action_diversity` and
-     `reward_observation_aware`) that punish the iter-1 mode-collapse
-     failure where every seed produced the same canned plan
-     (`std_return == 0`).
+   - 3 **anti-collapse rewards**: `reward_action_diversity`
+     (within-group rarity), `reward_observation_aware` (state-conditioned
+     behaviour), and **iter-4's `reward_batch_action_entropy`** — a
+     batch-wide entropy bonus that gives a non-zero gradient *out* of
+     full collapse, not just a barrier preventing entry to it.
 
-   Saves the LoRA adapter to `_artifacts/qwen_cybersec_lora/`,
-   per-step reward components to `_artifacts/training_log.json`, and
+   Saves the LoRA adapter to `_artifacts/qwen_cybersec_lora/`, per-step
+   reward components to `_artifacts/training_log.json`, and
    KL/loss/per-component diagnostic plots to
    `_artifacts/training_diagnostics.png`.
-4. **Trained-policy eval** — re-loads the adapter via Unsloth (so the
+4. **Trained-policy eval** — reloads the adapter via Unsloth (so the
    same fused-QKV attention patch used during training is present at
-   inference) and re-runs the *exact same 50 seeds × 3 train scenarios*
-   from step 1, then a separate **held-out OOD eval** on
-   `cloud_metadata_ssrf`. Writes `_artifacts/before_after_curves.png`,
+   inference) and re-runs the same 30 seeds × 3 train scenarios from
+   step 1, then a separate **held-out OOD eval** on `cloud_metadata_ssrf`,
+   all over the live HF Space. Writes `_artifacts/before_after_curves.png`,
    `_artifacts/summary_table.md`, `_artifacts/post_train_metrics.json`,
-   and `_artifacts/heldout_metrics.json`. This is the file the judge
-   reads last.
+   and `_artifacts/heldout_metrics.json`.
+5. **Sanity canaries** — the iter-4 gate before a run is shipped:
+   - heuristic > random on aggregate baseline return,
+   - trained-policy invalid-action rate ≤ 20%,
+   - trained-policy never >5pts below random on any train scenario,
+   - **≥ 2 of 3 train scenarios must have `std_return > 0.1`** (iter-3
+     passed the previous "any one" version while still being collapsed
+     on the other two),
+   - **`monitor_fallback_rate` ≤ 50%** — catches the case where a
+     "trained" policy is actually a wall of unparseable text saved by
+     the `MONITOR` fallback in `llm_act`.
 
-A single `MODE` dict at the top of the notebook controls every dial
-(episode counts, GRPO step count, generations, dataset size, an
-optional remote-env smoke check against the live HF Space); change one
-number, rerun, no other edits.
+A single `MODE` dict (in both the notebook and `train.py`) controls
+every dial. `train.py` also accepts CLI overrides:
 
-The core trick: every reward channel is already a separately-scored,
-dense signal, so GRPO can use them as independent reward functions
-instead of relying on a single scalar. That, plus the two anti-collapse
-rewards in iter-2, is what makes the gradient stable on a 1.5B model
-with batch size ≪ episode horizon. A reward-hack canary suite at
-`tests/test_reward_hack_canaries.py` is the alarm that catches future
-mode-collapse regressions before they ship.
+```bash
+python train.py --grpo-max-steps 200 --n-baseline-episodes 50
+python train.py --baseline-only --mode local           # smoke test
+python train.py --grpo-temperature 1.4 --grpo-beta 0.06 # nudge anti-collapse
+```
+
+The core trick: every reward channel is already a separately-scored
+dense signal, so GRPO uses them as independent reward functions
+instead of one scalar. That, plus iter-4's three anti-collapse rewards
+and the bumped `num_generations`/`temperature`/`beta` defaults, is
+what makes gradients stable on a 1.5B model with batch size ≪ horizon.
+The canary suite at `tests/test_reward_hack_canaries.py` is the alarm
+that catches future mode-collapse regressions before they ship.
+
+### Iteration history
+
+The hackathon submission is iter-4. Each iteration was driven by a
+specific failure observed in the previous run:
+
+| Iter | Change | Why |
+|---|---|---|
+| **iter-1** | One scalar reward, fixed seeds. | Trained policy "won" with `std_return = 0.0` on 2/3 scenarios — a memorised canned plan. |
+| **iter-2** | Add `reward_action_diversity` + `reward_observation_aware`; held-out scenario `cloud_metadata_ssrf`. | Make mode collapse *visible* and shape against it. |
+| **iter-3** | Move eval to OpenEnv WebSocket protocol; package as canonical HF Space; runtime detection. | Make the eval the judges actually run match the eval the developer runs. |
+| **iter-4** | `reward_batch_action_entropy` + bumped `num_generations` (4→6) / `temperature` (1.0→1.2) / `beta` (0→0.04) / `lr` (5e-6→3e-6); `monitor_fallback_rate` metric; tightened std=0 canary to ≥2/3 scenarios. | Iter-3 still showed `std_return=0` on 2/3 train scenarios. The diversity reward is a *prevention* signal, not a recovery one — once everything is identical, every candidate scores the same. The new entropy reward gives a positive gradient out of collapse; bumped sampling makes that gradient findable. |
 
 ---
 

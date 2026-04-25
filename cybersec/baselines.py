@@ -215,6 +215,15 @@ class EpisodeResult:
     confirmed_compromised: List[str]
     invalid_action_count: int
     false_positive_count: int
+    # Iter-4: honest validity reporting.
+    #
+    # ``invalid_action_count`` only counts steps the *server* rejected as
+    # invalid (target missing from valid_targets, etc). LLM policies that
+    # silently fall back to ``MONITOR`` on parse failure trivially score
+    # 0 on that metric while still being garbage. ``monitor_fallback_count``
+    # is set by the policy itself via ``policy.last_act_was_fallback``
+    # before each action is returned, and bubbles up through ``run_episode``.
+    monitor_fallback_count: int = 0
     reward_curve: List[float] = field(default_factory=list)
 
 
@@ -238,10 +247,16 @@ def run_episode(
     obs = env.reset(seed=seed, **reset_kwargs)
     invalid = 0
     fp = 0
+    fallback = 0
     reward_curve: List[float] = []
 
     while not obs.done:
         action = policy.act(obs)
+        # Policies that emit text and parse it (LLM policies in particular)
+        # set this attribute *inside* `act()` so we can distinguish a
+        # genuine MONITOR decision from a parse-failure fallback.
+        if getattr(policy, "last_act_was_fallback", False):
+            fallback += 1
         obs = env.step(action)
         rb = obs.info.get("reward_breakdown", {}) if isinstance(obs.info, dict) else {}
         if rb.get("invalid_action_penalty", 0.0):
@@ -265,6 +280,7 @@ def run_episode(
         confirmed_compromised=list(obs.confirmed_compromised),
         invalid_action_count=invalid,
         false_positive_count=fp,
+        monitor_fallback_count=fallback,
         reward_curve=reward_curve,
     )
 
@@ -275,6 +291,7 @@ def aggregate_results(results: List[EpisodeResult]) -> Dict[str, float]:
     if not results:
         return {}
     n = len(results)
+    total_steps = sum(r.steps for r in results) or 1
     return {
         "n_episodes": n,
         "mean_return": round(sum(r.cumulative_reward for r in results) / n, 3),
@@ -285,6 +302,9 @@ def aggregate_results(results: List[EpisodeResult]) -> Dict[str, float]:
         ),
         "mean_invalid_actions": round(sum(r.invalid_action_count for r in results) / n, 3),
         "mean_false_positives": round(sum(r.false_positive_count for r in results) / n, 3),
+        "monitor_fallback_rate": round(
+            sum(r.monitor_fallback_count for r in results) / total_steps, 3
+        ),
         "containment_rate": round(
             sum(
                 1

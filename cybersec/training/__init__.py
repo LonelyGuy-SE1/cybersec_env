@@ -26,7 +26,7 @@ Public surface:
 
 from __future__ import annotations
 
-from .rewards import (
+from .rewards import (  # noqa: F401
     SYSTEM_PROMPT,
     default_reward_funcs,
     parse_first_json_object,
@@ -35,6 +35,7 @@ from .rewards import (
     restore_env,
     reward_action_diversity,
     reward_avoids_exfil_path,
+    reward_batch_action_entropy,
     reward_json_valid,
     reward_no_redundant_containment,
     reward_observation_aware,
@@ -53,6 +54,7 @@ __all__ = [
     "restore_env",
     "reward_action_diversity",
     "reward_avoids_exfil_path",
+    "reward_batch_action_entropy",
     "reward_json_valid",
     "reward_no_redundant_containment",
     "reward_observation_aware",

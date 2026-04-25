@@ -13,24 +13,41 @@ folder, not at the repo root).
 
 | Path | What it is |
 |---|---|
-| `cybersec/` | The OpenEnv environment package (action/observation models, scripted attacker, FastAPI server, Dockerfile, `openenv.yaml`). |
-| `tests/` | Pytest contract tests for the env and scenarios. |
-| `notebooks/` | One end-to-end Colab notebook (`cybersec_grpo.ipynb`) that runs baseline eval -> GRPO training -> post-training eval in a single Run-All. |
-| `*.pdf`, `*.txt` | Hackathon reference material (themes, judging criteria, FAQ). |
+| `cybersec/` | The OpenEnv environment package (action/observation models, scripted attacker, FastAPI server, Dockerfile, `openenv.yaml`, `training/` reward functions). |
+| `train.py` | The end-to-end **training superscript**. One command: baseline eval → dataset build → GRPO QLoRA training → post-training eval against the live HF Space → sanity canaries. Mirrors the notebook 1:1. |
+| `notebooks/cybersec_grpo.ipynb` | Same pipeline, click-through Colab/Kaggle UX. |
+| `tests/` | Pytest contract tests for the env, reward functions, and reward-hack canaries. |
 
-## Three commands to get going
+## Two ways to run the full pipeline
 
 ```bash
 # 1. Install the env (run from repo root)
 pip install -e ./cybersec[dev]
 
-# 2. Verify the contract
-pytest -q
+# A) Headless — the canonical "superscript".
+#    Defaults: GRPO 120 steps, 30 baseline + 30 post-train episodes/scenario,
+#    eval over the deployed HF Space.
+python train.py
 
-# 3. Run the env locally
-cybersec-server   # then connect with cybersec.CybersecEnv(base_url="http://localhost:8000")
+# B) Notebook — same pipeline, but visible step-by-step in Colab/Kaggle.
+jupyter notebook notebooks/cybersec_grpo.ipynb
+```
+
+`train.py` accepts overrides for every dial (run `python train.py -h`).
+For a sub-1-minute smoke against the live Space:
+
+```bash
+python train.py --baseline-only --n-baseline-episodes 2
+```
+
+## Verifying the env contract
+
+```bash
+pytest -q                           # 73 tests, includes reward-hack canaries
+openenv validate cybersec           # OpenEnv layout / metadata check
+cybersec-server                     # serve the env locally on port 8000
 ```
 
 For everything else — design rationale, action/reward spec, baselines,
-training notebooks, Docker, HF Spaces deployment — see
+iteration history, scenarios, Docker, HF Spaces deployment — see
 [`cybersec/README.md`](./cybersec/README.md).

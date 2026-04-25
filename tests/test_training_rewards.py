@@ -292,6 +292,7 @@ def test_default_reward_funcs_is_stable_order():
         "reward_avoids_exfil_path",
         "reward_action_diversity",
         "reward_observation_aware",
+        "reward_batch_action_entropy",
     ]
 
 

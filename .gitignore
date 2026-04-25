@@ -41,3 +41,7 @@ push.log
 cybersec/outputs/*
 !cybersec/outputs/.gitkeep
 .scripts/
+
+NEXT_STEPS.md
+USER_GUIDE.md
+prompt.txt
