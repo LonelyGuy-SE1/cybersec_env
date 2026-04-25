@@ -15,7 +15,7 @@ folder, not at the repo root).
 |---|---|
 | `cybersec/` | The OpenEnv environment package (action/observation models, scripted attacker, FastAPI server, Dockerfile, `openenv.yaml`). |
 | `tests/` | Pytest contract tests for the env and scenarios. |
-| `notebooks/` | Three Colab/Kaggle-ready notebooks (baseline eval, GRPO training, post-train eval). |
+| `notebooks/` | One end-to-end Colab notebook (`cybersec_grpo.ipynb`) that runs baseline eval -> GRPO training -> post-training eval in a single Run-All. |
 | `*.pdf`, `*.txt` | Hackathon reference material (themes, judging criteria, FAQ). |
 
 ## Three commands to get going
