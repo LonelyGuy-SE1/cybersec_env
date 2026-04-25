@@ -253,20 +253,36 @@ containment.
 
 ## 6. Training story
 
-The notebooks in `../notebooks/` walk through the canonical RLVR training arc:
+A single end-to-end notebook at [`../notebooks/cybersec_grpo.ipynb`](../notebooks/cybersec_grpo.ipynb)
+walks through the full RLVR training arc in one Run-All pass. Open it on
+Colab via the badge at the top, pick a T4 runtime, and let it go — roughly
+**45 min** of wall clock from cold install to before/after plots:
 
-1. **`01_baseline_eval.ipynb`** — runs Random, Heuristic, and (optionally) a
-   frozen `Qwen2.5-1.5B-Instruct` defender for 50 seeds × 3 scenarios. Plots
-   reward curves and dumps `_artifacts/baseline_metrics.json` plus a JSONL of
-   every heuristic trajectory for SFT warm-up.
-2. **`02_grpo_train.ipynb`** — Unsloth-loaded Qwen2.5-1.5B-Instruct, 4-bit
-   QLoRA, then TRL GRPO using **six independent reward functions** (JSON
-   validity, schema validity, target-in-valid_targets, no-redundant-containment,
-   actual env step reward via cloned snapshot, exfil-path bonus). Designed
-   to fit Colab T4 / Kaggle P100 / one HF GPU dollar.
-3. **`03_post_train_eval.ipynb`** — re-runs the *exact same seeds* from
-   notebook 1 against the trained policy and produces before/after plots on
-   identical axes. The judge reads this notebook last.
+1. **Baseline** — `RandomPolicy` and `HeuristicPolicy` over 50 seeds × 3
+   scenarios. Writes `_artifacts/baseline_metrics.json` and the per-scenario
+   reward-curve plot.
+2. **Dataset build** — 1500 `(state-snapshot, prompt)` pairs harvested from
+   heuristic rollouts. Each prompt is paired with a pickled
+   `CybersecEnvironment`, so GRPO reward functions can clone the env and
+   score candidate actions against the *real* environment dynamics — this is
+   where the long-horizon multi-agent surface enters training.
+3. **GRPO training** — Unsloth-loaded Qwen2.5-1.5B-Instruct, 4-bit QLoRA,
+   then TRL GRPO for **100 steps × 4 generations/prompt** scored by **six
+   independent reward functions** (JSON validity, schema validity,
+   target-in-valid_targets, no-redundant-containment, actual env step reward
+   via cloned snapshot, exfil-path bonus). Saves the LoRA adapter to
+   `_artifacts/qwen_cybersec_lora/` and per-step reward components to
+   `_artifacts/training_log.json`.
+4. **Trained-policy eval** — re-loads the adapter via Unsloth (so the same
+   fused-QKV attention patch used during training is present at inference)
+   and re-runs the *exact same 50 seeds × 3 scenarios* from step 1. Writes
+   `_artifacts/before_after_curves.png`, `_artifacts/summary_table.md`, and
+   `_artifacts/post_train_metrics.json`. This is the file the judge reads
+   last.
+
+A single `MODE` dict at the top of the notebook controls every dial
+(episode counts, GRPO step count, generations, dataset size); change one
+number, rerun, no other edits.
 
 The core trick: every reward channel is already a separately-scored, dense
 signal, so GRPO can use them as independent reward functions instead of
