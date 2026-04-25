@@ -34,7 +34,9 @@ from .scenarios import (
     IdentityTemplate,
     Scenario,
     get_scenario,
+    list_eval_scenarios,
     list_scenarios,
+    list_train_scenarios,
     scenario_catalog,
 )
 
@@ -56,6 +58,8 @@ __all__ = [
     "IdentityTemplate",
     "Scenario",
     "get_scenario",
+    "list_eval_scenarios",
     "list_scenarios",
+    "list_train_scenarios",
     "scenario_catalog",
 ]

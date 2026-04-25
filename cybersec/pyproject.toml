@@ -65,11 +65,13 @@ include-package-data = true
 packages = [
     "cybersec",
     "cybersec.server",
+    "cybersec.training",
 ]
 
 [tool.setuptools.package-dir]
 cybersec = "."
 "cybersec.server" = "server"
+"cybersec.training" = "training"
 
 [tool.setuptools.package-data]
 cybersec = ["py.typed"]

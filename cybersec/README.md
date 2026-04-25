@@ -254,40 +254,61 @@ containment.
 ## 6. Training story
 
 A single end-to-end notebook at [`../notebooks/cybersec_grpo.ipynb`](../notebooks/cybersec_grpo.ipynb)
-walks through the full RLVR training arc in one Run-All pass. Open it on
-Colab via the badge at the top, pick a T4 runtime, and let it go — roughly
-**45 min** of wall clock from cold install to before/after plots:
+walks through the full RLVR training arc in one Run-All pass. The
+notebook installs the env package straight from the deployed HF Space
+(no GitHub clone), so the Space *is* the canonical source. Open it on
+Colab via the badge at the top, pick a T4 runtime, and let it go —
+roughly **45–60 min** of wall clock from cold install to before/after
+plots:
 
 1. **Baseline** — `RandomPolicy` and `HeuristicPolicy` over 50 seeds × 3
-   scenarios. Writes `_artifacts/baseline_metrics.json` and the per-scenario
-   reward-curve plot.
-2. **Dataset build** — 1500 `(state-snapshot, prompt)` pairs harvested from
-   heuristic rollouts. Each prompt is paired with a pickled
-   `CybersecEnvironment`, so GRPO reward functions can clone the env and
-   score candidate actions against the *real* environment dynamics — this is
-   where the long-horizon multi-agent surface enters training.
-3. **GRPO training** — Unsloth-loaded Qwen2.5-1.5B-Instruct, 4-bit QLoRA,
-   then TRL GRPO for **100 steps × 4 generations/prompt** scored by **six
-   independent reward functions** (JSON validity, schema validity,
-   target-in-valid_targets, no-redundant-containment, actual env step reward
-   via cloned snapshot, exfil-path bonus). Saves the LoRA adapter to
-   `_artifacts/qwen_cybersec_lora/` and per-step reward components to
-   `_artifacts/training_log.json`.
-4. **Trained-policy eval** — re-loads the adapter via Unsloth (so the same
-   fused-QKV attention patch used during training is present at inference)
-   and re-runs the *exact same 50 seeds × 3 scenarios* from step 1. Writes
-   `_artifacts/before_after_curves.png`, `_artifacts/summary_table.md`, and
-   `_artifacts/post_train_metrics.json`. This is the file the judge reads
-   last.
+   training scenarios + 1 held-out OOD scenario (`cloud_metadata_ssrf`,
+   never seen during training). Writes `_artifacts/baseline_metrics.json`
+   and the per-scenario reward-curve plot.
+2. **Dataset build** — ~1500 `(state-snapshot, prompt)` pairs harvested
+   from heuristic rollouts on the **training scenarios only**. Each
+   prompt is paired with a pickled `CybersecEnvironment`, so GRPO reward
+   functions can clone the env and score candidate actions against the
+   *real* environment dynamics — this is where the long-horizon
+   multi-agent surface enters training.
+3. **GRPO training** — Unsloth-loaded Qwen2.5-1.5B-Instruct, 4-bit
+   QLoRA, then TRL GRPO for **100 steps × 4 generations/prompt** scored
+   by **eight independent reward functions** living in
+   [`cybersec/training/rewards.py`](training/rewards.py):
+   - 4 schema/validity rewards (JSON valid, schema valid, target in
+     `valid_targets`, no redundant containment),
+   - 1 actual env-step reward via cloned snapshot,
+   - 1 exfil-path shaping prior,
+   - 2 **anti-collapse rewards** (`reward_action_diversity` and
+     `reward_observation_aware`) that punish the iter-1 mode-collapse
+     failure where every seed produced the same canned plan
+     (`std_return == 0`).
+
+   Saves the LoRA adapter to `_artifacts/qwen_cybersec_lora/`,
+   per-step reward components to `_artifacts/training_log.json`, and
+   KL/loss/per-component diagnostic plots to
+   `_artifacts/training_diagnostics.png`.
+4. **Trained-policy eval** — re-loads the adapter via Unsloth (so the
+   same fused-QKV attention patch used during training is present at
+   inference) and re-runs the *exact same 50 seeds × 3 train scenarios*
+   from step 1, then a separate **held-out OOD eval** on
+   `cloud_metadata_ssrf`. Writes `_artifacts/before_after_curves.png`,
+   `_artifacts/summary_table.md`, `_artifacts/post_train_metrics.json`,
+   and `_artifacts/heldout_metrics.json`. This is the file the judge
+   reads last.
 
 A single `MODE` dict at the top of the notebook controls every dial
-(episode counts, GRPO step count, generations, dataset size); change one
+(episode counts, GRPO step count, generations, dataset size, an
+optional remote-env smoke check against the live HF Space); change one
 number, rerun, no other edits.
 
-The core trick: every reward channel is already a separately-scored, dense
-signal, so GRPO can use them as independent reward functions instead of
-relying on a single scalar. That's what makes the gradient stable on a 1.5B
-model with batch size ≪ episode horizon.
+The core trick: every reward channel is already a separately-scored,
+dense signal, so GRPO can use them as independent reward functions
+instead of relying on a single scalar. That, plus the two anti-collapse
+rewards in iter-2, is what makes the gradient stable on a 1.5B model
+with batch size ≪ episode horizon. A reward-hack canary suite at
+`tests/test_reward_hack_canaries.py` is the alarm that catches future
+mode-collapse regressions before they ship.
 
 ---
 

@@ -433,21 +433,157 @@ def _insider_repo_pivot() -> Scenario:
 
 
 # ---------------------------------------------------------------------------
+# Scenario 4 (held-out / OOD eval): Cloud metadata SSRF + ransom prep
+# ---------------------------------------------------------------------------
+#
+# This scenario is intentionally *not* in the GRPO training set. Its DAG is
+# a different shape from the three training scenarios (no human identity
+# pivot at all -- the whole chain is service principals + cloud metadata),
+# so a policy that has only memorised "isolate the secrets vault" cannot
+# transfer here without actually reading the observation.
+
+
+def _cloud_metadata_ssrf() -> Scenario:
+    assets = (
+        AssetTemplate("public-webapp", "service", 0.7, "edge", "Internet-facing web app"),
+        AssetTemplate("metadata-svc", "service", 0.95, "core", "Cloud metadata endpoint (169.254.169.254)"),
+        AssetTemplate("kms-keyring", "datastore", 0.95, "core", "Cloud KMS key ring"),
+        AssetTemplate("backup-bucket", "datastore", 0.85, "data", "Production backup object store"),
+        AssetTemplate("egress-cloud", "service", 0.4, "edge", "Cloud egress NAT"),
+        AssetTemplate("status-page", "service", 0.3, "edge", "Public status page (decoy)"),
+    )
+    identities = (
+        IdentityTemplate("svc-webapp-role", "service-principal", 0.6, "Public-webapp instance role"),
+        IdentityTemplate("svc-backup-role", "service-principal", 0.85, "Backup-job instance role"),
+        IdentityTemplate("svc-kms-encryptor", "service-principal", 0.9, "KMS encrypt-only role"),
+        IdentityTemplate("svc-statuspage", "service-principal", 0.3, "Status-page deploy role"),
+    )
+    stages = (
+        AttackStage(
+            stage_id="cm1_ssrf",
+            mitre_tactic="TA0001 Initial Access",
+            mitre_technique="T1190 Exploit Public-Facing Application",
+            target_asset="public-webapp",
+            dwell_range=(2, 5),
+            success_prob=0.95,
+            detection_strength=0.3,
+            alert_lag_range=(2, 5),
+            description="SSRF in the public web app pivots to cloud metadata service",
+        ),
+        AttackStage(
+            stage_id="cm2_metadata_creds",
+            mitre_tactic="TA0006 Credential Access",
+            mitre_technique="T1552.005 Cloud Instance Metadata API",
+            prereq_stages=("cm1_ssrf",),
+            target_asset="metadata-svc",
+            target_identity="svc-webapp-role",
+            dwell_range=(3, 7),
+            success_prob=0.85,
+            detection_strength=0.45,
+            alert_lag_range=(2, 5),
+            compromises_identity=True,
+            description="Mint short-lived AWS/GCP creds for the webapp instance role",
+        ),
+        AttackStage(
+            stage_id="cm3_role_chain",
+            mitre_tactic="TA0008 Lateral Movement",
+            mitre_technique="T1078.004 Cloud Accounts",
+            prereq_stages=("cm2_metadata_creds",),
+            target_identity="svc-backup-role",
+            dwell_range=(5, 10),
+            success_prob=0.65,
+            detection_strength=0.5,
+            alert_lag_range=(2, 5),
+            compromises_identity=True,
+            description="AssumeRole-chain from webapp -> backup role",
+        ),
+        AttackStage(
+            stage_id="cm4_kms_replicate",
+            mitre_tactic="TA0009 Collection",
+            mitre_technique="T1486 Data Encrypted for Impact",
+            prereq_stages=("cm3_role_chain",),
+            target_asset="kms-keyring",
+            target_identity="svc-kms-encryptor",
+            dwell_range=(6, 12),
+            success_prob=0.7,
+            detection_strength=0.55,
+            alert_lag_range=(2, 6),
+            compromises_asset=True,
+            description="Replicate KMS keys to attacker tenant for ransom-note encryption",
+        ),
+        AttackStage(
+            stage_id="cm5_exfil",
+            mitre_tactic="TA0010 Exfiltration",
+            mitre_technique="T1567.002 Exfiltration to Cloud Storage",
+            prereq_stages=("cm4_kms_replicate",),
+            target_asset="egress-cloud",
+            dwell_range=(2, 5),
+            success_prob=0.9,
+            detection_strength=0.7,
+            alert_lag_range=(0, 2),
+            is_exfil=True,
+            description="Exfiltrate snapshot of backup-bucket through cloud egress",
+        ),
+    )
+    return Scenario(
+        scenario_id="cloud_metadata_ssrf",
+        title="Cloud metadata SSRF + ransom prep",
+        summary=(
+            "An SSRF in a public web app reaches the cloud metadata service, "
+            "mints short-lived instance-role credentials, role-chains to the "
+            "backup service principal, replicates KMS keys, and exfiltrates "
+            "the production backup bucket."
+        ),
+        horizon=70,
+        background_alert_rate=0.15,
+        assets=assets,
+        identities=identities,
+        stages=stages,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
+#
+# Three training scenarios + one held-out OOD scenario. Train code paths
+# should iterate ``list_train_scenarios()``; eval / generalisation reports
+# should iterate ``list_scenarios()`` (which includes the held-out one) or
+# ``list_eval_scenarios()`` (only the held-out one).
 
 
-_FACTORIES: Dict[str, Callable[[], Scenario]] = {
+_TRAIN_FACTORIES: Dict[str, Callable[[], Scenario]] = {
     "supply_chain_token_drift": _supply_chain_token_drift,
     "federated_identity_takeover": _federated_identity_takeover,
     "insider_repo_pivot": _insider_repo_pivot,
 }
 
+_EVAL_ONLY_FACTORIES: Dict[str, Callable[[], Scenario]] = {
+    "cloud_metadata_ssrf": _cloud_metadata_ssrf,
+}
+
+_FACTORIES: Dict[str, Callable[[], Scenario]] = {
+    **_TRAIN_FACTORIES,
+    **_EVAL_ONLY_FACTORIES,
+}
+
 
 def list_scenarios() -> List[str]:
-    """Return scenario IDs in their canonical evaluation order."""
+    """Return every scenario ID (training + held-out) in canonical order."""
 
     return list(_FACTORIES.keys())
+
+
+def list_train_scenarios() -> List[str]:
+    """Scenario IDs that may appear in the GRPO training dataset."""
+
+    return list(_TRAIN_FACTORIES.keys())
+
+
+def list_eval_scenarios() -> List[str]:
+    """Held-out scenario IDs used only for OOD generalisation reports."""
+
+    return list(_EVAL_ONLY_FACTORIES.keys())
 
 
 def get_scenario(scenario_id: str) -> Scenario:
@@ -472,6 +608,8 @@ __all__ = [
     "AttackStage",
     "Scenario",
     "list_scenarios",
+    "list_train_scenarios",
+    "list_eval_scenarios",
     "get_scenario",
     "scenario_catalog",
 ]

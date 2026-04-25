@@ -23,6 +23,7 @@ notebooks/**/.ipynb_checkpoints/
 notebooks/**/_outputs/
 notebooks/**/_artifacts/
 notebooks/**/_checkpoints/
+_artifacts/
 
 # Eval artifacts produced by run_episode batches
 outputs/
@@ -39,3 +40,4 @@ push.log
 # Runtime artifact dir for the env (created by openenv validate's recommendation)
 cybersec/outputs/*
 !cybersec/outputs/.gitkeep
+.scripts/
