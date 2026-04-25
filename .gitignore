@@ -32,3 +32,10 @@ eval_logs/
 .env
 .env.*
 api.txt
+
+# Logs from openenv push
+push.log
+
+# Runtime artifact dir for the env (created by openenv validate's recommendation)
+cybersec/outputs/*
+!cybersec/outputs/.gitkeep

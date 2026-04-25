@@ -48,7 +48,9 @@ notebooks = [
 ]
 
 [project.scripts]
-cybersec-server = "cybersec.server.app:main"
+# Entry-point name must literally be ``server`` so that ``openenv validate``
+# and ``openenv push`` recognize the env as deployable.
+server = "cybersec.server.app:main"
 
 [project.urls]
 Homepage = "https://github.com/methuselah/cybersec-openenv"

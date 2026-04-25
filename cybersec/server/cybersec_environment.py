@@ -37,24 +37,50 @@ from typing import Any, Dict, List, Optional, Set
 
 from openenv.core.env_server.interfaces import Environment
 
-from ..attacker import (
-    AttackerEvent,
-    DefenderView,
-    ScriptedAttacker,
-    StageStatus,
-)
-from ..models import (
-    ActionType,
-    AlertEvent,
-    AttackerPersonality,
-    CybersecAction,
-    CybersecObservation,
-    CybersecState,
-    ForensicResult,
-)
-from ..reward import RewardModel, RewardWeights, StepSignals
-from ..scenarios import Scenario, get_scenario, list_scenarios
-from ..telemetry import TelemetryEngine
+# Two-mode import. When the package is pip-installed (local dev, tests,
+# notebooks) we are reachable as ``cybersec.server.cybersec_environment`` and
+# the ``..`` imports resolve to ``cybersec.attacker`` etc. On Hugging Face
+# Spaces the env is launched with ``uvicorn server.app:app`` from ``/app/env``,
+# which makes ``server`` a *top-level* package and ``..`` reaches above it; we
+# fall back to bare absolute imports that pick the modules up from CWD.
+try:
+    from ..attacker import (
+        AttackerEvent,
+        DefenderView,
+        ScriptedAttacker,
+        StageStatus,
+    )
+    from ..models import (
+        ActionType,
+        AlertEvent,
+        AttackerPersonality,
+        CybersecAction,
+        CybersecObservation,
+        CybersecState,
+        ForensicResult,
+    )
+    from ..reward import RewardModel, RewardWeights, StepSignals
+    from ..scenarios import Scenario, get_scenario, list_scenarios
+    from ..telemetry import TelemetryEngine
+except ImportError:  # pragma: no cover - HF Spaces / docker runtime path
+    from attacker import (  # type: ignore[no-redef]
+        AttackerEvent,
+        DefenderView,
+        ScriptedAttacker,
+        StageStatus,
+    )
+    from models import (  # type: ignore[no-redef]
+        ActionType,
+        AlertEvent,
+        AttackerPersonality,
+        CybersecAction,
+        CybersecObservation,
+        CybersecState,
+        ForensicResult,
+    )
+    from reward import RewardModel, RewardWeights, StepSignals  # type: ignore[no-redef]
+    from scenarios import Scenario, get_scenario, list_scenarios  # type: ignore[no-redef]
+    from telemetry import TelemetryEngine  # type: ignore[no-redef]
 
 
 _ALERT_BUFFER = 12

@@ -25,7 +25,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Set
 
-from .models import RewardBreakdown
+# Two-mode import: relative when imported as ``cybersec.reward``, absolute
+# fallback when ``reward`` is loaded as a top-level module from CWD on HF.
+try:
+    from .models import RewardBreakdown
+except ImportError:  # pragma: no cover - HF Spaces / docker runtime path
+    from models import RewardBreakdown  # type: ignore[no-redef]
 
 
 # ---------------------------------------------------------------------------

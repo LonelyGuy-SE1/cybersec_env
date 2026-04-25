@@ -20,8 +20,14 @@ from __future__ import annotations
 import random
 from typing import List, Optional, Set
 
-from .models import AlertEvent, AlertSignal, ForensicResult
-from .scenarios import Scenario
+# Two-mode import: relative when imported as ``cybersec.telemetry``,
+# absolute fallback for HF Spaces top-level CWD launch.
+try:
+    from .models import AlertEvent, AlertSignal, ForensicResult
+    from .scenarios import Scenario
+except ImportError:  # pragma: no cover - HF Spaces / docker runtime path
+    from models import AlertEvent, AlertSignal, ForensicResult  # type: ignore[no-redef]
+    from scenarios import Scenario  # type: ignore[no-redef]
 
 
 _NOISE_DESCRIPTIONS = {

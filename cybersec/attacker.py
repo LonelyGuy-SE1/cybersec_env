@@ -23,8 +23,15 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple
 
-from .models import AlertEvent, AlertSignal, AttackerPersonality
-from .scenarios import AttackStage, Scenario
+# Two-mode import: relative when ``cybersec`` is the parent package,
+# absolute when this module is loaded as a top-level module from CWD on
+# Hugging Face Spaces.
+try:
+    from .models import AlertEvent, AlertSignal, AttackerPersonality
+    from .scenarios import AttackStage, Scenario
+except ImportError:  # pragma: no cover - HF Spaces / docker runtime path
+    from models import AlertEvent, AlertSignal, AttackerPersonality  # type: ignore[no-redef]
+    from scenarios import AttackStage, Scenario  # type: ignore[no-redef]
 
 
 # ---------------------------------------------------------------------------

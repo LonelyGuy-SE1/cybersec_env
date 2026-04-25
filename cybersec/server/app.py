@@ -55,27 +55,37 @@ app = create_app(
 )
 
 
-def main(host: str = "0.0.0.0", port: int = 8000) -> None:
-    """Console-script entry point used by ``cybersec-server``.
+def main() -> None:
+    """Console-script entry point.
 
-    Honors ``CYBERSEC_HOST`` / ``CYBERSEC_PORT`` for parity with the Dockerfile.
+    Used by:
+
+      * the ``server`` console script declared in ``pyproject.toml``
+        (``openenv validate`` requires this exact name).
+      * ``python -m cybersec.server.app`` and ``python server/app.py``.
+
+    CLI flags are honored for local development; ``CYBERSEC_HOST`` /
+    ``CYBERSEC_PORT`` env vars take precedence so the Docker image and
+    Hugging Face Spaces deploy can override the bind address without code
+    changes.
     """
 
-    import uvicorn
-
-    host = os.getenv("CYBERSEC_HOST", host)
-    port = int(os.getenv("CYBERSEC_PORT", str(port)))
-    uvicorn.run(app, host=host, port=port, reload=False)
-
-
-if __name__ == "__main__":
     import argparse
+
+    import uvicorn
 
     parser = argparse.ArgumentParser(description="Run the Cybersec OpenEnv server.")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
-    main(host=args.host, port=args.port)
+
+    host = os.getenv("CYBERSEC_HOST", args.host)
+    port = int(os.getenv("CYBERSEC_PORT", str(args.port)))
+    uvicorn.run(app, host=host, port=port, reload=False)
+
+
+if __name__ == "__main__":
+    main()
 
 
 __all__ = ["app", "main"]
