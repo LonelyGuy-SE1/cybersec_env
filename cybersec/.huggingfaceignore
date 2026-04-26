@@ -1,0 +1,10 @@
+# Python build artifacts
+**/.venv/
+**/*.egg-info/
+**/__pycache__/
+**/*.pyc
+
+# Local runtime logs
+outputs/
+_artifacts/
+push.log

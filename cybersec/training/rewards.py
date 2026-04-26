@@ -341,7 +341,7 @@ def reward_step_total(
             r = float(obs.reward or 0.0)
         except Exception:
             r = -1.0
-        out.append(max(-2.0, min(2.0, r)))
+        out.append(max(-5.0, min(5.0, r)))
     return out
 
 
@@ -534,6 +534,8 @@ def default_reward_funcs() -> List[Callable[..., List[float]]]:
         reward_no_redundant_containment,
         reward_step_total,
         reward_avoids_exfil_path,
+        reward_action_diversity,
+        reward_observation_aware,
     ]
 
 
