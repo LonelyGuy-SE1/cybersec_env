@@ -20,20 +20,38 @@ I chose to train a tiny `Qwen2.5-1.5B-Instruct` model via GRPO (Group Relative P
 
 This is a long-horizon, partially observable Markov decision process (POMDP) featuring 4 highly detailed scenarios (3 for training, 1 held-out for out-of-distribution evaluation). There are two agents in the room.
 
+**Training Scenarios**
+| ID | Title | Stages | Horizon |
+|---|---|---|---|
+| `supply_chain_token_drift` | CI-token theft → poisoned artifact → payments pivot → warehouse exfil | 5 | 70 |
+| `federated_identity_takeover` | Spearphish → MFA fatigue → helpdesk pivot → HR portal → cloud-egress exfil | 5 | 70 |
+| `insider_repo_pivot` | Repo recon → secret harvest → staging → prod cluster → DB exfil | 6 | 80 |
+
+**Held-out (Evaluation-only) Scenario**
+| ID | Title | Stages | Horizon |
+|---|---|---|---|
+| `cloud_metadata_ssrf` | SSRF → cloud metadata → assumed role → cloud storage exfil | 4 | 60 |
+
 ### The Adversary (Scripted)
-The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG), pulling off attacks like `supply_chain_token_drift` and `federated_identity_takeover`. To simulate realism, the attacker is assigned one of three personalities:
-* **AGGRESSIVE:** Simulates an amateur. Fast, loud, brute-force approach. Generates high alerts but progresses quickly.
-* **STEALTHY:** Simulates an experienced APT. Higher success rate, but heavily penalized for generating noise. The defender must proactively hunt them using investigations.
-* **OPPORTUNISTIC:** A balanced, middle-ground approach that dynamically reroutes paths based on defenses.
+The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG). To simulate realism, the attacker is assigned one of three personalities (its sample space):
+
+| Personality     | Dwell × | Detection × | Pause-after-defender | Reroutes |
+|---|---|---|---|---|
+| `stealthy`      | 1.5×    | 0.55×       | 50%                 | no       |
+| `aggressive`    | 0.6×    | 1.30×       | 0%                  | no       |
+| `opportunistic` | 1.0×    | 1.0×        | 15%                 | yes      |
 
 ### The Defender (The LLM)
-The LLM reads partial observations (lagged alerts, investigation forensics) and chooses one of six structured actions per tick: 
-1. `MONITOR`: Advance the clock and wait for telemetry.
-2. `INVESTIGATE`: Target an asset for a forensic confidence score.
-3. `ISOLATE_ASSET`: Disconnect a server (incurs a heavy disruption penalty).
-4. `REVOKE_IDENTITY`: Kill user credentials.
-5. `BLOCK_EGRESS`: Shut down outbound traffic.
-6. `PATCH_ASSET`: Harden a vulnerable node.
+The LLM reads partial observations (lagged alerts, investigation forensics) and chooses one of six structured actions per tick:
+
+| Action            | Target           | Effect |
+|---|---|---|
+| `MONITOR`         | (none)           | Low cost; advances time and observations. |
+| `INVESTIGATE`     | asset / identity | Noisy forensic signal on the target. |
+| `ISOLATE_ASSET`   | asset            | Quarantine; can interrupt in-progress stages. |
+| `REVOKE_IDENTITY` | identity         | Revoke credentials; blocks identity pivots. |
+| `BLOCK_EGRESS`    | asset            | Containment oriented to exfiltration. |
+| `PATCH_ASSET`     | asset            | One-shot hardening; lowers stage success odds. |
 
 A typical interaction forces the LLM to ingest noisy data, decide to investigate, and then act upon the findings:
 
@@ -68,7 +86,18 @@ Training an RL agent is never a straight line. During my initial GRPO training l
 
 The LLM had found a degenerate cheat code. 
 
-The environment utilizes a dense 6-channel reward system (Detection, Containment, False Positives, Disruption, Invalid Syntax, and Terminal Survival). Because the "disruption penalty" (the cost of taking a business asset offline) had a hard cap per tick, the mathematically optimal move for the LLM was to instantly `ISOLATE_ASSET` every single server in the company at Tick 0. The LLM essentially said, *"I solved the hack by unplugging the internet."*
+The environment utilizes a dense 6-channel reward system:
+
+| Channel                    | Sign | Role |
+|---|---|---|
+| `detection`               | +    | First confirmed compromise of an attacker target |
+| `containment`             | +/-  | Active and preemptive containment, net of action cost |
+| `false_positive_penalty`  | −    | Containment on non-attack-path targets |
+| `disruption_penalty`      | −    | Operational cost of isolations and egress blocks |
+| `invalid_action_penalty`  | −    | Structurally invalid JSON actions |
+| `terminal_score`          | ±    | Episode outcome: clean resolution vs exfiltration |
+
+Because the "disruption penalty" (the cost of taking a business asset offline) had a hard cap per tick, the mathematically optimal move for the LLM was to instantly `ISOLATE_ASSET` every single server in the company at Tick 0. The LLM essentially said, *"I solved the hack by unplugging the internet."*
 
 **The Fix:** I removed the disruption cap, forcing a linearly scaling penalty for every isolated asset. I also restructured the training script into **On-Policy Iterative Self-Play Loops**:
 * **Outer Loop 0 (The Warmup):** The script generates a quick 1,500 rows of data using a hardcoded heuristic policy. The LLM runs its first batch of optimizer steps on this dataset simply to learn the required JSON schema and basic valid actions.

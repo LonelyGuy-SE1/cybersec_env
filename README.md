@@ -26,25 +26,42 @@ This is a long-horizon, partially observable Markov decision process (POMDP) whe
 
 ### The Scenarios
 The environment includes three training scenarios and one held-out scenario for out-of-distribution evaluation, all based on real MITRE ATT&CK techniques:
-* **Training:** `supply_chain_token_drift` (5 stages, 70 ticks), `federated_identity_takeover` (5 stages, 70 ticks), `insider_repo_pivot` (6 stages, 80 ticks).
-* **Held-out:** `cloud_metadata_ssrf` (4 stages, 60 ticks).
+
+**Training Scenarios**
+| ID | Title | Stages | Horizon |
+|---|---|---|---|
+| `supply_chain_token_drift` | CI-token theft → poisoned artifact → payments pivot → warehouse exfil | 5 | 70 |
+| `federated_identity_takeover` | Spearphish → MFA fatigue → helpdesk pivot → HR portal → cloud-egress exfil | 5 | 70 |
+| `insider_repo_pivot` | Repo recon → secret harvest → staging → prod cluster → DB exfil | 6 | 80 |
+
+**Held-out (Evaluation-only) Scenario**
+| ID | Title | Stages | Horizon |
+|---|---|---|---|
+| `cloud_metadata_ssrf` | SSRF → cloud metadata → assumed role → cloud storage exfil | 4 | 60 |
 
 ### The Adversary (Scripted)
-The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG) for the given scenario. To simulate realism, the attacker is assigned one of three personalities:
-* **AGGRESSIVE:** Simulates an amateur. Fast, loud, brute-force approach (0.6x dwell time). Generates high alerts (1.3x detection) but progresses quickly.
-* **STEALTHY:** Simulates an experienced APT. Higher success rate, but heavily penalized for generating noise (0.55x detection). The defender must proactively hunt them (1.5x dwell time).
-* **OPPORTUNISTIC:** A balanced, middle-ground approach that can reroute paths based on network defenses.
+The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG) for the given scenario. To simulate realism, the attacker is assigned one of three personalities (its sample space):
+
+| Personality     | Dwell × | Detection × | Pause-after-defender | Reroutes |
+|---|---|---|---|---|
+| `stealthy`      | 1.5×    | 0.55×       | 50%                 | no       |
+| `aggressive`    | 0.6×    | 1.30×       | 0%                  | no       |
+| `opportunistic` | 1.0×    | 1.0×        | 15%                 | yes      |
 
 ### The Defender (The LLM) & Action Space
 The LLM reads partial observations (lagged alerts, investigation forensics, valid targets) and chooses one of six structured actions per tick:
-1. `MONITOR`: Low cost; advances time and observations. Used to wait for telemetry.
-2. `INVESTIGATE`: Target an asset/identity. Provides a noisy, probabilistic forensic confidence score of compromise.
-3. `ISOLATE_ASSET`: Quarantine a server; can interrupt in-progress attack stages.
-4. `REVOKE_IDENTITY`: Revoke user credentials; blocks identity pivots.
-5. `BLOCK_EGRESS`: Containment oriented specifically to stopping exfiltration.
-6. `PATCH_ASSET`: One-shot hardening; lowers the attacker's stage success odds.
 
-### A Typical Interaction
+| Action            | Target           | Effect |
+|---|---|---|
+| `MONITOR`         | (none)           | Low cost; advances time and observations. |
+| `INVESTIGATE`     | asset / identity | Noisy forensic signal on the target. |
+| `ISOLATE_ASSET`   | asset            | Quarantine; can interrupt in-progress stages. |
+| `REVOKE_IDENTITY` | identity         | Revoke credentials; blocks identity pivots. |
+| `BLOCK_EGRESS`    | asset            | Containment oriented to exfiltration. |
+| `PATCH_ASSET`     | asset            | One-shot hardening; lowers stage success odds. |
+
+A typical interaction forces the LLM to ingest noisy data, decide to investigate, and then act upon the findings:
+
 ```json
 // Observation (Tick 4)
 {
@@ -76,12 +93,15 @@ I used **Group Relative Policy Optimization (GRPO)** via Hugging Face TRL and Un
 
 ### The Reward Model (6 Channels)
 Instead of a sparse 0/1 win/loss reward, the environment provides a dense 6-channel reward signal:
-* `detection (+)`: First confirmed compromise of an attacker target via `INVESTIGATE`.
-* `containment (+/-)`: Active and preemptive containment, net of action cost.
-* `false_positive_penalty (-)`: Containment on non-attack-path targets.
-* `disruption_penalty (-)`: The operational cost of isolations and egress blocks.
-* `invalid_action_penalty (-)`: Structurally invalid JSON actions.
-* `terminal_score (+/-)`: Episode outcome (survival bonus vs. exfiltration penalty).
+
+| Channel                    | Sign | Role |
+|---|---|---|
+| `detection`               | +    | First confirmed compromise of an attacker target |
+| `containment`             | +/-  | Active and preemptive containment, net of action cost |
+| `false_positive_penalty`  | −    | Containment on non-attack-path targets |
+| `disruption_penalty`      | −    | Operational cost of isolations and egress blocks |
+| `invalid_action_penalty`  | −    | Structurally invalid JSON actions |
+| `terminal_score`          | ±    | Episode outcome: clean resolution vs exfiltration |
 
 ### The Struggle: The Disruption Exploit
 During my initial GRPO training loop, the model achieved a massive score, but I noticed the standard deviation of the returns across the batch was exactly `0.0`. 
