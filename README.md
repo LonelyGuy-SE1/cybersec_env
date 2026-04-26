@@ -22,7 +22,7 @@ Why use a tiny `Qwen2.5-1.5B-Instruct` model instead of a 70B parameter behemoth
 
 ## 3. The Environment: Technical Specs
 
-This is a long-horizon, partially observable Markov decision process (POMDP) where two agents interact within an enterprise network topology.
+This is a long-horizon, partially observable Markov decision process (POMDP) where two agents interact within an enterprise network topology. The environment emphasizes **long-horizon planning**: staged attacks (credential theft, dwell time, lateral pivots, exfiltration) unfold over many ticks with stochastic timing, and early signals can be incredibly weak.
 
 ### The Scenarios
 The environment includes three training scenarios and one held-out scenario for out-of-distribution evaluation, all based on real MITRE ATT&CK techniques:
@@ -40,7 +40,7 @@ The environment includes three training scenarios and one held-out scenario for 
 | `cloud_metadata_ssrf` | SSRF → cloud metadata → assumed role → cloud storage exfil | 4 | 60 |
 
 ### The Adversary (Scripted)
-The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG) for the given scenario. To simulate realism, the attacker is assigned one of three personalities (its sample space):
+The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG) for the given scenario. Each node in the DAG represents a sequential attack stage the adversary must complete to reach their exfiltration goal. To simulate realism, the attacker is assigned one of three personalities (its sample space):
 
 | Personality     | Dwell × | Detection × | Pause-after-defender | Reroutes |
 |---|---|---|---|---|

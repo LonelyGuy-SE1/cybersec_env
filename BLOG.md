@@ -18,7 +18,9 @@ I chose to train a tiny `Qwen2.5-1.5B-Instruct` model via GRPO (Group Relative P
 
 ## The Environment: A Multi-Agent POMDP
 
-This is a long-horizon, partially observable Markov decision process (POMDP) featuring 4 highly detailed scenarios (3 for training, 1 held-out for out-of-distribution evaluation). There are two agents in the room.
+This is a long-horizon, partially observable Markov decision process (POMDP) featuring 4 highly detailed scenarios (3 for training, 1 held-out for out-of-distribution evaluation). There are two agents in the room. 
+
+The environment is built around the concept of **long-horizon planning**: attacks are not instantaneous. Credential theft, dwell times, lateral pivots, and data exfiltration unfold over many ticks (up to 80) with stochastic timing. Because early alert signals can be incredibly weak, the LLM must learn to anticipate future states rather than just reacting to the immediate present.
 
 **Training Scenarios**
 | ID | Title | Stages | Horizon |
@@ -33,7 +35,7 @@ This is a long-horizon, partially observable Markov decision process (POMDP) fea
 | `cloud_metadata_ssrf` | SSRF → cloud metadata → assumed role → cloud storage exfil | 4 | 60 |
 
 ### The Adversary (Scripted)
-The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG). To simulate realism, the attacker is assigned one of three personalities (its sample space):
+The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG). Each node in the DAG is a sequential stage the attacker must complete to win. To simulate realism, the attacker is assigned one of three personalities (its sample space):
 
 | Personality     | Dwell × | Detection × | Pause-after-defender | Reroutes |
 |---|---|---|---|---|
