@@ -21,10 +21,16 @@
  
 **A long-horizon, adversarial RL environment where a 1.5B-parameter model learns to think like a senior SOC analyst — without burning down the network.**
  
-🔑 **Key result:** Fine-tuned on 3 attack scenarios only, the trained policy was evaluated on a **4th scenario it had never seen** (`cloud_metadata_ssrf`). There it **beat the zero-shot base LLM** (mean return **5.48 vs 4.91**) and the hand-crafted heuristic — the clearest signal is **out-of-distribution generalization**, not memorising train scenarios.
+**Key result:** Fine-tuned on 3 attack scenarios only, the trained policy was evaluated on a **4th scenario it had never seen** (`cloud_metadata_ssrf`). There it **beat the zero-shot base LLM** (mean return **5.48 vs 4.91**) and the hand-crafted heuristic — the clearest signal is **out-of-distribution generalization**, not memorising train scenarios.
  
 ---
-[**▶ Play the Live Environment**](https://huggingface.co/spaces/Lonelyguyse1/cybersec) &nbsp;|&nbsp; [**📝 Design Blog**](BLOG.md) &nbsp;|&nbsp; [**🧪 Training Notebook**](notebooks/cybersec_grpo.ipynb)
+[<img src="https://img.shields.io/badge/Hugging%20Face-Live%20Space-yellow?style=for-the-badge&logo=huggingface" alt="Open the live Space on Hugging Face" height="28">](https://huggingface.co/spaces/Lonelyguyse1/cybersec)
+&nbsp;
+[<img src="https://img.shields.io/badge/Design-BLOG-blue?style=for-the-badge&logo=markdown" alt="Read the design blog" height="28">](BLOG.md)
+&nbsp;
+[<img src="https://img.shields.io/badge/GitHub-Notebook-24292f?style=for-the-badge&logo=github" alt="GRPO training notebook on GitHub" height="28">](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo.ipynb)
+&nbsp;
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo.ipynb)
  
 </div>
  
@@ -56,9 +62,9 @@ Existing cyber environments treat the problem as a **static, point-in-time class
  
 **Cybersec OpenEnv** was built to simulate the real *fog of war* inside a Security Operations Center:
  
-- ⏳ **Long-horizon attacks** — staged, multi-step campaigns that unfold over many environment ticks
-- 📡 **Delayed telemetry** — early signals are deliberately weak and noisy
-- 💸 **Real business costs** — taking systems offline has consequences, modeled explicitly
+- **Long-horizon attacks** — staged, multi-step campaigns that unfold over many environment ticks
+- **Delayed telemetry** — early signals are deliberately weak and noisy
+- **Real business costs** — taking systems offline has consequences, modeled explicitly
 Training an RL agent on a live production network is risky and expensive. This environment makes that training safe, fast, and reproducible.
  
 ---
@@ -69,9 +75,9 @@ The defender is a **`Qwen2.5-1.5B-Instruct`** model — not a 70B behemoth. Here
  
 | Constraint | Why It Matters |
 |---|---|
-| 🚀 **Iteration Speed** | Multiple RL training cycles fit on a single Colab T4 GPU |
-| 🔒 **Privacy & Security** | No sensitive network telemetry ever leaves your infrastructure to an external API |
-| 🌐 **Edge Deployment** | 70B models aren't viable for mass enterprise adoption; this is built for the real world |
+| **Iteration speed** | Multiple RL training cycles fit on a single Colab T4 GPU |
+| **Privacy and security** | No sensitive network telemetry ever leaves your infrastructure to an external API |
+| **Edge deployment** | 70B models aren't viable for mass enterprise adoption; this is built for the real world |
  
 The goal: prove that small, open-source LLMs can be fine-tuned to reason like **risk-aware senior SOC analysts**.
  
@@ -109,9 +115,9 @@ The attacker walks a **deterministic MITRE ATT&CK-aligned Directed Acyclic Graph
  
 | Personality | Dwell Time | Detection Risk | Pauses After Defender | Reroutes? |
 |---|:---:|:---:|:---:|:---:|
-| `stealthy` | 1.5× slower | 0.55× lower | 50% chance | ✗ |
-| `aggressive` | 0.6× faster | 1.30× higher | Never | ✗ |
-| `opportunistic` | Baseline | Baseline | 15% chance | ✓ |
+| `stealthy` | 1.5× slower | 0.55× lower | 50% chance | No |
+| `aggressive` | 0.6× faster | 1.30× higher | Never | No |
+| `opportunistic` | Baseline | Baseline | 15% chance | Yes |
  
 ---
  
@@ -128,14 +134,14 @@ Each tick, the LLM receives a **partial observation** — lagged alerts, forensi
 | `BLOCK_EGRESS` | asset | Containment focused on preventing data exfiltration |
 | `PATCH_ASSET` | asset | One-shot hardening; lowers future stage success probability |
  
-> ⚠️ Invalid or out-of-set targets **still consume a tick** and incur an `invalid_action_penalty`.
+> **Caution:** Invalid or out-of-set targets **still consume a tick** and incur an `invalid_action_penalty`.
  
 ---
  
 ### Observation & Action Schema
  
 <details>
-<summary><strong>▶ Expand: Example observation (tick 4 of <code>federated_identity_takeover</code>)</strong></summary>
+<summary><strong>Expand: Example observation (tick 4 of <code>federated_identity_takeover</code>)</strong></summary>
 ```json
 {
   "tick": 4,
@@ -161,7 +167,7 @@ Each tick, the LLM receives a **partial observation** — lagged alerts, forensi
  
 </details>
 <details>
-<summary><strong>▶ Expand: Example action response</strong></summary>
+<summary><strong>Expand: Example action response</strong></summary>
 ```json
 {"action_type": "INVESTIGATE", "target": "u-platform-eng"}
 ```
@@ -187,15 +193,15 @@ Training uses **Group Relative Policy Optimization (GRPO)** via Hugging Face TRL
  
 Rather than sparse 0/1 win/loss feedback, the environment provides a **dense 7-channel reward signal** that shapes every tick of behavior:
  
-| Channel | Signal | Purpose |
+| Channel | Polarity | Purpose |
 |---|:---:|---|
-| `detection` | ✅ + | Reward for first confirmed compromise of an attacker target |
-| `containment` | ✅ +/− | Net reward for active and preemptive containment, minus action cost |
-| `evidence_bonus` | ✅ + | Extra reward for containing targets **already confirmed** via `INVESTIGATE` |
-| `false_positive_penalty` | ❌ − | Penalty for containment actions on non-attack-path targets |
-| `disruption_penalty` | ❌ − | Operational cost of isolations and egress blocks |
-| `invalid_action_penalty` | ❌ − | Penalty for illegal actions (bad target, wrong verb type) |
-| `terminal_score` | ✅/❌ ± | Episode outcome: clean resolution bonus vs. exfiltration penalty |
+| `detection` | Reward (+) | Reward for first confirmed compromise of an attacker target |
+| `containment` | Mixed (+/−) | Net reward for active and preemptive containment, minus action cost |
+| `evidence_bonus` | Reward (+) | Extra reward for containing targets **already confirmed** via `INVESTIGATE` |
+| `false_positive_penalty` | Penalty (−) | Penalty for containment actions on non-attack-path targets |
+| `disruption_penalty` | Penalty (−) | Operational cost of isolations and egress blocks |
+| `invalid_action_penalty` | Penalty (−) | Penalty for illegal actions (bad target, wrong verb type) |
+| `terminal_score` | Outcome (±) | Episode outcome: clean resolution bonus vs. exfiltration penalty |
  
 ---
  
@@ -237,7 +243,7 @@ To prevent **mode collapse** into repetitive actions, three additional dispersio
  
 ## 5. Results
  
-Training was run on a single **Tesla T4** (Colab), 2 outer loops × 60 GRPO steps = **120 total optimizer steps**, n=30 episodes per scenario for all evaluations. The figures in [`assets/`](assets/) were exported from a completed run (same plotting cells as [`notebooks/cybersec_grpo.ipynb`](notebooks/cybersec_grpo.ipynb)); raw numbers match that workflow.
+Training was run on a single **Tesla T4** (Colab), 2 outer loops × 60 GRPO steps = **120 total optimizer steps**, n=30 episodes per scenario for all evaluations. The figures in [`assets/`](assets/) were exported from a completed run (same plotting cells as [`notebooks/cybersec_grpo.ipynb`](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo.ipynb), mirrored in [`cybersec_grpo_results.ipynb`](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo_results.ipynb)); raw numbers match that workflow.
 
 **Scaling vs. what already works:** A 1.5B model at this step count has obvious headroom — **performance would likely improve a lot with more scale** (more GRPO steps, outer loops, data, or a larger base model). The primary result below is **out-of-distribution performance**: the policy **generalizes beyond the base model** on a scenario that never appeared in fine-tuning data.
 
@@ -262,14 +268,14 @@ Training was run on a single **Tesla T4** (Colab), 2 outer loops × 60 GRPO step
 Training-scenario rows (including where the heuristic still leads at this step budget) appear in the **full breakdown** below; they are reported for completeness alongside the held-out generalization result.
 
 <details>
-<summary><strong>▶ All scenarios — mean return summary</strong></summary>
+<summary><strong>Expand: All scenarios — mean return summary</strong></summary>
 
 | Scenario | Split | Random | Heuristic | Base-LLM | **Trained-LLM** | **Δ vs Heuristic** |
 |---|---|:---:|:---:|:---:|:---:|:---:|
 | `supply_chain_token_drift` | train | 2.156 | 2.872 | 5.832 | **5.515** | +2.643 |
 | `federated_identity_takeover` | train | 0.198 | 2.985 | 1.498 | **1.139** | −1.846 |
 | `insider_repo_pivot` | train | 2.905 | 3.057 | 4.627 | **5.310** | +2.253 |
-| `cloud_metadata_ssrf` | **held-out** | 1.723 | 3.048 | 4.912 | **5.482** | **+2.434** ✅ |
+| `cloud_metadata_ssrf` | **held-out** | 1.723 | 3.048 | 4.912 | **5.482** | **+2.434** |
 
 The regression on `federated_identity_takeover` at this budget is high-variance and scenario-specific; it does **not** undermine the held-out result above.
 
@@ -280,7 +286,7 @@ The regression on `federated_identity_takeover` at this budget is high-variance 
 ### Supporting plots (training + baselines)
 
 <details>
-<summary><strong>▶ Expand: diagnostics, baselines, per-scenario curves</strong></summary>
+<summary><strong>Expand: diagnostics, baselines, per-scenario curves</strong></summary>
 
 **Training diagnostics** — GRPO training log over optimizer steps (two outer loops). Left: loss and KL. Middle: aggregate reward and completion length. Right: selected auxiliary reward heads (valid JSON, schema, targets, observation-aware). *Interpretation: action-format and grounding signals rise after warmup; the model is learning to emit legal, on-schema actions before reward from the env dominates.*
 
@@ -314,7 +320,7 @@ After fine-tuning: **98.3% valid-action rate** (6 invalid / 343 steps), **0.0% m
 ### Full Results Table
  
 <details>
-<summary><strong>▶ Expand full per-scenario breakdown</strong></summary>
+<summary><strong>Expand: Full per-scenario breakdown</strong></summary>
 `exfil_rate` = fraction of episodes where the attacker reached final exfiltration. `invalid_rate` = out-of-set or unparseable actions. `mon_fallback` = ticks defaulting to MONITOR due to parse failure.
  
 | scenario | split | policy | mean\_return | std | mean\_stages | exfil\_rate | invalid\_rate | mon\_fallback |
@@ -393,7 +399,7 @@ python scripts/train_cybersec_grpo.py --output-dir ./_artifacts
 | `run_manifest.json` | Full run configuration |
 | `grpo_checkpoints_outer*/` | Per-outer-loop checkpoints |
  
-**Notebook (Colab / Jupyter)** — same algorithm, baselines, plots, and eval: [`notebooks/cybersec_grpo.ipynb`](notebooks/cybersec_grpo.ipynb)
+**Notebooks:** GRPO template [`notebooks/cybersec_grpo.ipynb`](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo.ipynb) — [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo.ipynb). Reference run with saved outputs: [`notebooks/cybersec_grpo_results.ipynb`](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo_results.ipynb) — [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo_results.ipynb).
  
 ---
  

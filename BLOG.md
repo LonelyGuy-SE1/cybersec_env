@@ -1,9 +1,10 @@
 ---
 title: "Teaching a 1.5B LLM to be a SOC Analyst (Without Burning Down the Network)"
-thumbnail: assets/aggregate_performance.png
+thumbnail: https://raw.githubusercontent.com/LonelyGuy-SE1/cybersec_env/main/assets/aggregate_performance.png
 authors:
   - user: LonelyGuySE1
 ---
+
 
 # Teaching a 1.5B LLM to be a SOC Analyst (Without Burning Down the Network)
 
@@ -100,15 +101,17 @@ After 120 optimizer steps across 2 outer loops, the numbers:
 - **Monitor fallback rate: 0.0%** — the model emits well-formed JSON every tick
 - **Schema compliance: 97.1%** — up from 72.1% at warmup
 
-But the result that matters is this one.
+The quantitative story that matters for **out-of-distribution transfer** is the held-out scenario `cloud_metadata_ssrf` (never in the fine-tuning corpus). There, mean cumulative return (n=30 episodes) is **5.48 (trained)** vs **4.91 (zero-shot base LLM)** vs **3.05 (heuristic)** — i.e. the adapter **generalizes past the frozen base weights** on a novel attack chain, not only past the scripted baseline.
 
-![Aggregate before/after GRPO — training scenarios (left) vs held-out OOD scenario (right)](https://cdn-uploads.huggingface.co/production/uploads/691defbd159b76f65d1e8161/enYBdNrpQ2CBdkutGbOiR.png)
+![Aggregate before/after GRPO — training scenarios (left) vs held-out OOD scenario (right)](https://raw.githubusercontent.com/LonelyGuy-SE1/cybersec_env/main/assets/aggregate_performance.png)
 
-On the **training scenarios** (left panel), the fine-tuned policy performs on par with the zero-shot base model. That's expected — 120 optimizer steps on three scenarios is a light training budget.
+*Figure: Left — aggregate mean cumulative reward over the three training scenarios. Right — same metric on **held-out** `cloud_metadata_ssrf` only; shaded bands are cross-seed spread.*
 
-On the **held-out scenario** (right panel) — `cloud_metadata_ssrf`, which the model never saw during training — it beats everything. It beats random. It beats the hand-crafted heuristic (+2.43). It beats the zero-shot base model, which has the same weights and saw the same pretraining data.
+On the **training scenarios** (left panel), the fine-tuned policy is in the same ballpark as the zero-shot base model at this light budget (120 steps, three scenarios).
 
-| Scenario | Heuristic | Trained-LLM | Δ |
+On the **held-out scenario** (right panel) — `cloud_metadata_ssrf`, which the model never saw during training — it leads every baseline: random, heuristic (+2.43 mean return vs heuristic), and the **zero-shot base LLM (+0.57)** on the same evaluation protocol.
+
+| Scenario | Heuristic | Trained-LLM | Δ vs heuristic |
 |---|:---:|:---:|:---:|
 | `supply_chain_token_drift` | 2.872 | 5.515 | +2.643 |
 | `federated_identity_takeover` | 2.985 | 1.139 | −1.846 |
@@ -133,10 +136,12 @@ The broader point: the combination of a realistic long-horizon environment, a we
 
 ---
 
-**Play the environment:** [huggingface.co/spaces/Lonelyguyse1/cybersec](https://huggingface.co/spaces/Lonelyguyse1/cybersec)  
+**Live Space:** [huggingface.co/spaces/Lonelyguyse1/cybersec](https://huggingface.co/spaces/Lonelyguyse1/cybersec)
 
-**Repo & training notebook:** [github.com/LonelyGuy-SE1/cybersec_env](https://github.com/LonelyGuy-SE1/cybersec_env)  
+**Repository and full write-up:** [github.com/LonelyGuy-SE1/cybersec_env](https://github.com/LonelyGuy-SE1/cybersec_env) (root [`README.md`](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/README.md) — tables, plots, held-out metrics)
 
-**API reference:** [`cybersec/README.md`](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/cybersec/README.md)
+**Package / HTTP API:** [`cybersec/README.md`](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/cybersec/README.md)
 
-**Final Training Script/ Notebook:** [Colab](https://colab.research.google.com/drive/1HUoMWXAYgB3rAt4rQ9tiyVIByfktx5ed?usp=sharing)
+**GRPO training notebook (GitHub):** [notebooks/cybersec_grpo.ipynb](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo.ipynb) — [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo.ipynb)
+
+**Reference run (saved cell outputs, same cells):** [notebooks/cybersec_grpo_results.ipynb](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo_results.ipynb) — [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo_results.ipynb)

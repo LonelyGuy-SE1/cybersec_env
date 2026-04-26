@@ -1,6 +1,5 @@
 ---
 title: Cybersec OpenEnv Environment
-emoji: "\U0001F6E1"
 colorFrom: red
 colorTo: gray
 sdk: docker
