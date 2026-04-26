@@ -21,7 +21,6 @@
  
 **A long-horizon, adversarial RL environment where a 1.5B-parameter model learns to think like a senior SOC analyst — without burning down the network.**
  
----
 🔑 **Key result:** Fine-tuned on 3 attack scenarios, the trained policy was dropped cold into a **4th scenario it had never seen** — and beat every baseline, including the hand-crafted heuristic (+2.43) and the zero-shot base model. General defensive reasoning, not memorisation.
  
 ---
@@ -332,15 +331,15 @@ The trained defender is evaluated across three programmatic task axes:
 │                    EVALUATION FRAMEWORK                         │
 ├──────────────────┬──────────────────────┬───────────────────────┤
 │  DETECTION       │  CONTAINMENT         │  SURVIVAL             │
-│                  │                      │                        │
-│  Accurately      │  Block in-progress   │  Prevent final         │
-│  identify and    │  lateral movement    │  exfiltration stage.   │
-│  confirm         │  or exfiltration     │                        │
-│  compromised     │  attempts.           │  Massive terminal      │
-│  targets.        │                      │  penalty on failure;   │
-│                  │  Scored by attack    │  survival bonus on     │
-│  Scored by true  │  stages prevented.   │  network preservation. │
-│  positive rate.  │                      │                        │
+│                  │                      │                       │
+│  Accurately      │  Block in-progress   │  Prevent final        │
+│  identify and    │  lateral movement    │  exfiltration stage.  │
+│  confirm         │  or exfiltration     │                       │
+│  compromised     │  attempts.           │  Massive terminal     │
+│  targets.        │                      │  penalty on failure;  │
+│                  │  Scored by attack    │  survival bonus on    │
+│  Scored by true  │  stages prevented.   │  network preservation.│
+│  positive rate.  │                      │                       │
 └──────────────────┴──────────────────────┴───────────────────────┘
 ```
  
