@@ -29,10 +29,17 @@ The environment is built around the concept of **long-horizon planning**: attack
 | `federated_identity_takeover` | Spearphish → MFA fatigue → helpdesk pivot → HR portal → cloud-egress exfil | 5 | 70 |
 | `insider_repo_pivot` | Repo recon → secret harvest → staging → prod cluster → DB exfil | 6 | 80 |
 
-**Held-out (Evaluation-only) Scenario**
+**Held-out (evaluation-only) scenario** (OOD generalisation; not in default GRPO `list_train_scenarios()`):
+
 | ID | Title | Stages | Horizon |
 |---|---|---|---|
 | `cloud_metadata_ssrf` | SSRF → cloud metadata → role-chain → KMS replicate → cloud storage exfil | 5 | 70 |
+
+### Try it on Hugging Face Spaces
+
+The live OpenEnv server is at **[huggingface.co/spaces/Lonelyguyse1/cybersec](https://huggingface.co/spaces/Lonelyguyse1/cybersec)**. The Space uses OpenEnv’s **`/web`** base path: `POST …/web/reset` and `POST …/web/step` with JSON bodies. Example actions wrap the defender move as `{"action": {"action_type": "MONITOR"}}` or `{"action": {"action_type": "INVESTIGATE", "target": "<asset-or-identity>"}}` — targets must appear under the current observation’s `valid_targets.assets` / `valid_targets.identities`. Copy-paste examples, scenario IDs, and optional env vars (`CYBERSEC_SCENARIO_ID`, …) are in the repo’s **[`cybersec/README.md`](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/cybersec/README.md)** (same file powers the Space README card).
+
+**Reset behaviour worth knowing:** if you omit **`scenario_id`**, the environment chooses among the four scenarios using the episode RNG. Omitting **`seed`** on a fresh reset uses a **new random seed** each time (so casual HTTP `/web/reset` with `{}` is not stuck on one scenario). Pass an explicit **`seed`** when you want a reproducible episode. The server can still pin a default scenario via **`CYBERSEC_SCENARIO_ID`** if that env var is set in the Space.
 
 ### The Adversary (Scripted)
 The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG). Each node in the DAG is a sequential stage the attacker must complete to win. To simulate realism, the attacker is assigned one of three personalities (its sample space):
@@ -44,7 +51,7 @@ The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (
 | `opportunistic` | 1.0×    | 1.0×        | 15%                 | yes      |
 
 ### The Defender (The LLM)
-The LLM reads partial observations (lagged alerts, investigation forensics) and chooses one of six structured actions per tick:
+The LLM reads **partial** observations: **alerts** (noisy, lagged; each has a coarse `signal` enum, `severity` in `[0,1]`, optional `asset` / `identity`, and a short `description`), **forensics** (past `INVESTIGATE` results with `is_compromised` and `confidence`), containment lists, and **`valid_targets` as a dict** `{"assets": [...], "identities": [...]}` (not a flat list). It emits **one JSON object per step** during training (`render_observation` + `SYSTEM_PROMPT` in `cybersec/training/rewards.py`).
 
 | Action            | Target           | Effect |
 |---|---|---|
@@ -55,31 +62,47 @@ The LLM reads partial observations (lagged alerts, investigation forensics) and 
 | `BLOCK_EGRESS`    | asset            | Containment oriented to exfiltration. |
 | `PATCH_ASSET`     | asset            | One-shot hardening; lowers stage success odds. |
 
-A typical interaction forces the LLM to ingest noisy data, decide to investigate, and then act upon the findings:
+Sketch aligned with the real **`CybersecObservation`** / **`CybersecAction`** schema (scenario-specific names differ):
 
 ```json
-// Observation (Tick 4)
 {
   "tick": 4,
-  "recent_alerts": [
-    {"signal": "Suspicious login attempt", "target": "u-vp-sales", "severity": "high"}
+  "horizon": 70,
+  "scenario_id": "supply_chain_token_drift",
+  "alerts": [
+    {
+      "tick": 4,
+      "signal": "lateral_movement",
+      "asset": "artifact-registry",
+      "identity": null,
+      "severity": 0.44,
+      "description": "RDP session between non-paired hosts"
+    }
   ],
-  "valid_targets": ["u-vp-sales", "idp-okta", "vpn-gw", "sales-crm"]
+  "forensics": [
+    {
+      "tick": 2,
+      "target": "ci-runner-01",
+      "target_kind": "asset",
+      "is_compromised": false,
+      "confidence": 0.68
+    }
+  ],
+  "valid_targets": {
+    "assets": ["ci-runner-01", "artifact-registry", "api-gateway"],
+    "identities": ["svc-ci-deploy", "u-platform-eng"]
+  }
 }
+```
 
-// LLM Action
-{"action_type": "INVESTIGATE", "target": "u-vp-sales"}
+```json
+{"action_type": "INVESTIGATE", "target": "artifact-registry"}
+```
 
-// Observation (Tick 5)
-{
-  "tick": 5,
-  "recent_forensics": [
-    {"target": "u-vp-sales", "is_compromised": true, "confidence": 0.85}
-  ]
-}
+Over the **HTTP** API, the same move is wrapped as:
 
-// LLM Action
-{"action_type": "REVOKE_IDENTITY", "target": "u-vp-sales"}
+```json
+{"action": {"action_type": "INVESTIGATE", "target": "artifact-registry"}}
 ```
 
 ## The Struggle: The Disruption Exploit
@@ -97,7 +120,7 @@ The environment utilizes a dense 7-channel reward system:
 | `evidence_bonus`          | +    | Containment actions on targets previously confirmed via INVESTIGATE |
 | `false_positive_penalty`  | −    | Containment on non-attack-path targets |
 | `disruption_penalty`      | −    | Operational cost of isolations and egress blocks |
-| `invalid_action_penalty`  | −    | Structurally invalid JSON actions |
+| `invalid_action_penalty`  | −    | Illegal defender moves (e.g. target not in `valid_targets`); tick still advances |
 | `terminal_score`          | ±    | Episode outcome: clean resolution vs exfiltration |
 
 Because the "disruption penalty" (the cost of taking a business asset offline) had a hard cap per tick, the mathematically optimal move for the LLM was to instantly `ISOLATE_ASSET` every single server in the company at Tick 0. The LLM essentially said, *"I solved the hack by unplugging the internet."*
@@ -110,8 +133,10 @@ But one exploit led to another. Even after removing the disruption cap, the mode
 
 **The Second Fix: Evidence-Based Containment.** I added a new reward channel: `evidence_bonus`. The model receives a +1.5 bonus for containing a target it has *already confirmed compromised* via an `INVESTIGATE` action. This means the optimal strategy is no longer "blindly isolate on tick 0" — it's "investigate first, confirm compromise, then surgically contain." The investigate-then-contain workflow scores higher than blind isolation, forcing the model to actually engage with the environment's telemetry.
 
+On top of that, GRPO training uses **dispersion-style rewards** (action diversity, observation-aware completions, batch entropy) so the policy does not collapse to a single repeated action when group-relative updates would otherwise wash out the learning signal. The full loop—baselines, outer-loop data collection, plots, and **strict canary** checks—is in **[`notebooks/cybersec_grpo.ipynb`](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo.ipynb)** and the headless driver **`scripts/train_cybersec_grpo.py`**.
+
 ## The Takeaway
 
 The potential of multi-agent, long-horizon adaptive systems is massive. An attacker rarely strikes all at once; they plan, gather info, wait, and pivot. By successfully training a 1.5B parameter model to navigate this environment without burning down the network, I've proven that small, open-source LLMs can be fine-tuned to reason like senior, risk-aware SOC analysts. 
 
-Check out the environment and run it yourself on Hugging Face Spaces!
+**Play the env:** [Hugging Face Space](https://huggingface.co/spaces/Lonelyguyse1/cybersec) · **Repo & install:** [github.com/LonelyGuy-SE1/cybersec_env](https://github.com/LonelyGuy-SE1/cybersec_env) · **API cheat sheet:** [`cybersec/README.md`](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/cybersec/README.md)

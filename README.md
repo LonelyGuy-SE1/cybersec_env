@@ -1,8 +1,8 @@
 # Cybersec OpenEnv: Teaching Small LLMs Surgical Cyber-Defense
 
-▶️ **Play the Environment:** [huggingface.co/spaces/Lonelyguyse1/cybersec](https://huggingface.co/spaces/Lonelyguyse1/cybersec)
+▶️ **Play the Environment:** [huggingface.co/spaces/Lonelyguyse1/cybersec](https://huggingface.co/spaces/Lonelyguyse1/cybersec) — HTTP examples and reset semantics: [`cybersec/README.md`](cybersec/README.md)
 
-📝 **Blog Post:** [BLOG.md](BLOG.md) — *Teaching a 1.5B LLM to be a SOC Analyst (Without Burning Down the Network)*
+📝 **Blog (design narrative, reward exploits, fixes):** [BLOG.md](BLOG.md) — *Teaching a 1.5B LLM to be a SOC Analyst (Without Burning Down the Network)* · [on GitHub](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/BLOG.md)
 
 🧪 **Training Notebook:** [notebooks/cybersec_grpo.ipynb](notebooks/cybersec_grpo.ipynb) — Colab-ready, runs end-to-end on a T4 GPU
 
@@ -53,7 +53,7 @@ The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (
 | `opportunistic` | 1.0×    | 1.0×        | 15%                 | yes      |
 
 ### The Defender (The LLM) & Action Space
-The LLM reads partial observations (lagged alerts, investigation forensics, valid targets) and chooses one of six structured actions per tick:
+The LLM reads partial observations (lagged **alerts**, **forensics** from past `INVESTIGATE` calls, containment state, and **`valid_targets`** as `{"assets": [...], "identities": [...]}`**) and chooses one structured **JSON** action per tick (training uses a single-line object; see `cybersec/training/rewards.py` `SYSTEM_PROMPT`).
 
 | Action            | Target           | Effect |
 |---|---|---|
@@ -64,32 +64,41 @@ The LLM reads partial observations (lagged alerts, investigation forensics, vali
 | `BLOCK_EGRESS`    | asset            | Containment oriented to exfiltration. |
 | `PATCH_ASSET`     | asset            | One-shot hardening; lowers stage success odds. |
 
-A typical interaction forces the LLM to ingest noisy data, decide to investigate, and then act upon the findings:
+**HTTP / OpenEnv web UI:** actions are posted as `{"action": {"action_type": "...", "target": "..."}}` under the Space **`/web`** prefix (e.g. `POST …/web/step`). Full examples and scenario IDs: [`cybersec/README.md`](cybersec/README.md) (also the Hugging Face Space card).
+
+Illustrative shapes (field names match `cybersec/models.py`; alert `signal` values are enums such as `auth_anomaly`, `lateral_movement`, `egress_anomaly`):
 
 ```json
-// Observation (Tick 4)
 {
   "tick": 4,
-  "recent_alerts": [
-    {"signal": "Suspicious login attempt", "target": "u-vp-sales", "severity": "high"}
+  "horizon": 70,
+  "scenario_id": "federated_identity_takeover",
+  "alerts": [
+    {
+      "tick": 4,
+      "signal": "auth_anomaly",
+      "asset": null,
+      "identity": "u-platform-eng",
+      "severity": 0.72,
+      "description": "Impossible travel + new device fingerprint"
+    }
   ],
-  "valid_targets": ["u-vp-sales", "idp-okta", "vpn-gw", "sales-crm"]
+  "forensics": [],
+  "valid_targets": {
+    "assets": ["api-gateway", "egress-proxy"],
+    "identities": ["u-platform-eng", "svc-ci-deploy"]
+  }
 }
-
-// LLM Action
-{"action_type": "INVESTIGATE", "target": "u-vp-sales"}
-
-// Observation (Tick 5)
-{
-  "tick": 5,
-  "recent_forensics": [
-    {"target": "u-vp-sales", "is_compromised": true, "confidence": 0.85}
-  ]
-}
-
-// LLM Action
-{"action_type": "REVOKE_IDENTITY", "target": "u-vp-sales"}
 ```
+
+```json
+{"action_type": "INVESTIGATE", "target": "u-platform-eng"}
+```
+
+After a forensic row exists, the model might emit `REVOKE_IDENTITY` / `ISOLATE_ASSET` with a target that still appears under `valid_targets`. Invalid or out-of-set targets **still consume a tick** and draw `invalid_action_penalty` (see `cybersec/reward.py`).
+
+### Reset & scenario selection
+On **`reset`**, you may pass **`scenario_id`** (one of the four IDs above), **`seed`** (int, for reproducibility), and optionally **`attacker_personality`**. If **`scenario_id`** is omitted, the env picks a scenario from `list_scenarios()` using the episode RNG (with today’s server: omitting **`seed`** draws a fresh random seed each reset so HTTP clients are not pinned to a single scenario). Optional process env **`CYBERSEC_SCENARIO_ID`** on the server sets a default scenario when the client omits `scenario_id`. Details: `cybersec/server/cybersec_environment.py`, `cybersec/server/app.py`.
 
 ## 4. Training Methodology
 
@@ -105,7 +114,7 @@ Instead of a sparse 0/1 win/loss reward, the environment provides a dense 7-chan
 | `evidence_bonus`          | +    | Containment actions on targets previously confirmed via INVESTIGATE |
 | `false_positive_penalty`  | −    | Containment on non-attack-path targets |
 | `disruption_penalty`      | −    | Operational cost of isolations and egress blocks |
-| `invalid_action_penalty`  | −    | Structurally invalid JSON actions |
+| `invalid_action_penalty`  | −    | Illegal actions (bad target, wrong type for verb, etc.); still consumes a tick |
 | `terminal_score`          | ±    | Episode outcome: clean resolution vs exfiltration |
 
 ### The Struggle: The Disruption Exploit
@@ -165,6 +174,8 @@ cybersec-server
 ```
 
 Docker: `docker build -t cybersec-env:latest -f cybersec/server/Dockerfile cybersec` then `docker run --rm -p 8000:8000 cybersec-env:latest`.
+
+On **Hugging Face Spaces**, the packaged app is mounted at **`base_path: /web`**, so health and OpenEnv routes are under **`/web`** (e.g. `/web/reset`, `/web/step`, `/web/ws`). See [`cybersec/README.md`](cybersec/README.md) for curl-style examples.
 
 ---
 
