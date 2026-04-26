@@ -180,4 +180,4 @@ On **Hugging Face Spaces**, the packaged app is mounted at **`base_path: /web`**
 ---
 
 ## License
-MIT — see `cybersec/pyproject.toml`.
+MIT.
