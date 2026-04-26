@@ -353,6 +353,7 @@ docker run --rm -p 8000:8000 cybersec-env:latest
 
 ---
 
+<<<<<<< HEAD
 <div align="center">
 
 **License:** MIT — see [`cybersec/pyproject.toml`](cybersec/pyproject.toml)
@@ -362,3 +363,7 @@ docker run --rm -p 8000:8000 cybersec-env:latest
 *Built to show that small, local, privacy-preserving models can match the reasoning of senior SOC analysts — tick by tick.*
 
 </div>
+=======
+## License
+MIT.
+>>>>>>> 9baea46e0689ebe27483f0fde200b6d5d32c4ff3
