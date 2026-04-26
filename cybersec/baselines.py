@@ -89,9 +89,11 @@ class RandomPolicy:
 
 @dataclass
 class HeuristicConfig:
-    investigate_severity_threshold: float = 0.30
-    isolate_severity_threshold: float = 0.55
-    revoke_severity_threshold: float = 0.55
+    # Lower thresholds react sooner to rising alert severity (helps aggressive
+    # attacker tempo where waiting for 0.55+ lets random luck outperform).
+    investigate_severity_threshold: float = 0.26
+    isolate_severity_threshold: float = 0.48
+    revoke_severity_threshold: float = 0.52
     confirmed_isolate_min_confidence: float = 0.65
     monitor_when_quiet: bool = True
 
@@ -215,9 +217,7 @@ class EpisodeResult:
     confirmed_compromised: List[str]
     invalid_action_count: int
     false_positive_count: int
-    # Iter-4: honest validity reporting.
-    #
-    # ``invalid_action_count`` only counts steps the *server* rejected as
+    # ``invalid_action_count`` counts steps the *server* rejected as
     # invalid (target missing from valid_targets, etc). LLM policies that
     # silently fall back to ``MONITOR`` on parse failure trivially score
     # 0 on that metric while still being garbage. ``monitor_fallback_count``

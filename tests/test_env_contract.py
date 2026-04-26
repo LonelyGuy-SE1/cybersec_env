@@ -20,6 +20,7 @@ from cybersec import (
     CybersecAction,
     CybersecEnvironment,
     CybersecObservation,
+    list_attacker_personalities,
     list_scenarios,
 )
 from cybersec.baselines import HeuristicPolicy, RandomPolicy, run_episode
@@ -27,6 +28,10 @@ from cybersec.baselines import HeuristicPolicy, RandomPolicy, run_episode
 
 def _is_obs(obj) -> bool:
     return isinstance(obj, CybersecObservation)
+
+
+def test_list_attacker_personalities_covers_enum() -> None:
+    assert set(list_attacker_personalities()) == set(AttackerPersonality)
 
 
 # ---------------------------------------------------------------------------

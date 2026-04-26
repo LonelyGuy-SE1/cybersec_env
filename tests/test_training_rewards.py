@@ -1,10 +1,4 @@
-"""Unit tests for ``cybersec.training.rewards``.
-
-These cover every public reward function exposed by
-:mod:`cybersec.training.rewards`, including the two anti-collapse rewards
-added in iter-2 (:func:`reward_action_diversity` and
-:func:`reward_observation_aware`).
-"""
+"""Unit tests for :mod:`cybersec.training.rewards`."""
 
 from __future__ import annotations
 
@@ -187,7 +181,7 @@ def test_reward_avoids_exfil_path_active_when_alerts_present():
 
 
 # ---------------------------------------------------------------------------
-# Anti-collapse rewards (iter-2)
+# Dispersion / state-conditioning rewards
 # ---------------------------------------------------------------------------
 
 
@@ -290,9 +284,6 @@ def test_default_reward_funcs_is_stable_order():
         "reward_no_redundant_containment",
         "reward_step_total",
         "reward_avoids_exfil_path",
-        "reward_action_diversity",
-        "reward_observation_aware",
-        "reward_batch_action_entropy",
     ]
 
 
@@ -323,3 +314,17 @@ def test_system_prompt_lists_all_action_types():
         "PATCH_ASSET",
     ):
         assert name in SYSTEM_PROMPT
+
+
+def test_default_grpo_mode_has_required_keys():
+    from cybersec.training.run_grpo import default_grpo_mode
+
+    for fast in (False, True):
+        m = default_grpo_mode(fast=fast)
+        for key in (
+            "on_policy_outer_loops",
+            "grpo_steps_per_outer_loop",
+            "max_dataset_rows",
+            "rollout_top_p",
+        ):
+            assert key in m

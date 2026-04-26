@@ -13,7 +13,7 @@ Each channel is computed from a simple :class:`StepSignals` struct populated
 by ``env.step``. The defender's per-step reward is the sum, clipped to a
 fixed range so a single overpowered signal cannot dominate training.
 
-Reward-hack guards:
+Design safeguards:
   * Detection only fires on the *first* confirmation of a given target.
   * Containment only fires on attack-path targets (not arbitrary isolation).
   * Disruption scales with weighted isolation load; optional per-tick cap

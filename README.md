@@ -1,56 +1,83 @@
-# Cybersec OpenEnv — repo root
+# Cybersec OpenEnv: Long-Horizon Multi-Agent Cyber Defense
 
-The OpenEnv environment lives in [`cybersec/`](./cybersec/), following the official
-`openenv init` layout (env folder = Python package, with `openenv.yaml`,
-`pyproject.toml`, and `server/Dockerfile` *inside* the env folder, not at the
-repo root).
+A clean, production-shaped OpenEnv environment for training LLM defenders against scripted attackers walking real MITRE ATT&CK kill chains.
 
-> **Read [`cybersec/README.md`](./cybersec/README.md)** — canonical spec for the
-> environment and Hugging Face Spaces card.
+▶️ **Play the Environment:** [huggingface.co/spaces/Lonelyguyse1/cybersec](https://huggingface.co/spaces/Lonelyguyse1/cybersec)
 
-## For reviewers / judges (quick read)
+---
 
-- **Task:** Long-horizon, multi-agent cyber defense: scripted MITRE-aligned
-  attacker vs a defender with six structured actions per tick, partial
-  observations, and multi-channel rewards (see `cybersec/README.md`).
-- **Train + eval:** [`notebooks/cybersec_grpo.ipynb`](./notebooks/cybersec_grpo.ipynb)
-  is the **single** end-to-end path: baselines → GRPO (Unsloth QLoRA) →
-  **base LLM vs trained** eval on the same seeds, plots, **strict canaries**
-  (e.g. per-train-scenario return variance, MONITOR parse-fallback cap).
-- **Live env:** client–server OpenEnv over WebSocket (typical deployment:
-  [HF Space](https://huggingface.co/spaces/Lonelyguyse1/cybersec)). First
-  request after sleep can take **30–60s**; plan for cold start when smoke-testing.
-- **Auth (optional):** set `HF_TOKEN` or `HUGGINGFACE_HUB_TOKEN` (e.g. Colab
-  **User secrets**) when pulling models or the Space snapshot to avoid rate-limit
-  / unauthenticated hub noise in logs.
-- **Repro:** `pip install -e ./cybersec[dev]` from this repo, then open the
-  notebook locally, or use **Open in Colab** from the notebook header.
+## 1. The Problem
+**Large Language Models struggle with long-horizon planning and delayed observability.** 
+Cybersecurity defense is not a point-in-time classification task. Real attackers don't push one button—they steal a credential at tick *t*, sit on it, escalate at *t + d₁*, pivot at *t + d₂*, and exfiltrate at *t + d₃*. The defender operates with an honest information disadvantage: detection is lagged, alerts are noisy, and actions like isolating a server have a real business cost. We built an environment to teach LLMs how to balance proactive threat containment against operational disruption.
 
-## What lives at this level
+## 2. Tasks & Grading
+To evaluate the agent's performance programmatically, the environment scores the defender across three primary tasks:
+* **Detection Task:** The agent must accurately identify and confirm compromised targets using the `INVESTIGATE` action. Scored by the number of true positive confirmations.
+* **Containment Task:** The agent must successfully block an attacker's in-progress lateral movement or exfiltration using `ISOLATE_ASSET`, `REVOKE_IDENTITY`, or `BLOCK_EGRESS`. Scored by the number of attack stages prevented.
+* **Survival Task:** The ultimate goal is to prevent the attacker from completing the exfiltration stage. Scored via a massive terminal penalty if exfiltration occurs, or a survival bonus if the network is preserved.
 
-| Path | What it is |
-|------|------------|
-| `cybersec/` | The OpenEnv environment package (action/observation models, scripted attacker, FastAPI server, Dockerfile, `openenv.yaml`, `training/` reward functions). |
-| `notebooks/cybersec_grpo.ipynb` | **Canonical** training + eval pipeline (Run All in Colab/Kaggle or Jupyter). |
-| `tests/` | Pytest contract tests for the env, reward functions, and reward-hack canaries. |
+## 3. The Environment
+There are two agents in the room: a scripted attacker with a chosen personality (stealthy, aggressive, opportunistic) driving ground truth, and the controllable LLM defender. The defender reads partial observations (lagged alerts, investigation forensics) and chooses one of six actions per tick (e.g., `MONITOR`, `INVESTIGATE`, `ISOLATE_ASSET`). 
 
-## Run the full pipeline
+The reward function forces the LLM to learn surgical defense:
+* **+ Reward:** Confirming a real compromise, preemptively blocking an attack path.
+* **- Penalty:** False-positive isolations, invalid formatting, and a scaling "disruption penalty" for keeping critical business assets offline.
+
+*(Read the full environment spec in `cybersec/README.md`)*
+
+## 3. The Results
+We trained Qwen2.5-1.5B-Instruct using an iterative, on-policy GRPO loop. 
+
+* **Before Training:** The baseline models either acted randomly (destroying the network) or followed a static heuristic.
+* **After Training:** The LLM learned to wait for telemetry, investigate alerts, and surgically isolate only the compromised assets, successfully preventing exfiltration across unseen topologies.
+
+![Before/After Reward Curves](_artifacts/before_after_curves.png)
+*Caption: The trained LLM consistently outperforms random and heuristic baselines, maintaining a positive cumulative reward without triggering mass-disruption penalties.*
+
+![Training Diagnostics](_artifacts/training_diagnostics.png)
+*Caption: GRPO loss, KL divergence, and per-component reward curves during the iterative on-policy training phase.*
+
+## 4. Why It Matters
+A model that can successfully navigate this environment has learned fundamental concepts of **risk-aware operational strategy**. If an LLM can learn to quarantine a compromised Kubernetes cluster while leaving the payments database online despite noisy alerts, it proves that open-source models can be fine-tuned to act as autonomous, SRE-grade SOC analysts.
+
+---
+
+## Install and train
 
 ```bash
 pip install -e ./cybersec[dev]
-jupyter notebook notebooks/cybersec_grpo.ipynb
+pytest -q
 ```
 
-Defaults in the notebook target a **full** GRPO budget (e.g. 300 steps); reduce
-`MODE["grpo_max_steps"]` and episode counts for a quick CPU/GPU smoke run.
-
-## Verifying the env contract
+**Dependencies** (from repo root; match your CUDA):
 
 ```bash
-pytest -q
-openenv validate cybersec
+pip install -e "./cybersec[grpo]"
+pip install "unsloth[cu121] @ git+https://github.com/unslothai/unsloth.git"
+```
+
+**Run the iterative on-policy training script**
+
+```bash
+python scripts/train_cybersec_grpo.py --output-dir ./_artifacts
+```
+
+`--fast` uses tiny budgets for a quick run. Outputs: `qwen_cybersec_lora/`, `training_log.json`, `run_manifest.json`, per-outer checkpoints under `grpo_checkpoints_outer*`.
+
+**Notebook (Colab / Jupyter)** — same algorithm, baselines, plots, eval: [notebooks/cybersec_grpo.ipynb](notebooks/cybersec_grpo.ipynb).
+
+---
+
+## Server
+
+```bash
 cybersec-server
 ```
 
-For design rationale, action/reward spec, scenarios, Docker, and HF Spaces
-deployment, see [`cybersec/README.md`](./cybersec/README.md).
+Docker: `docker build -t cybersec-env:latest -f cybersec/server/Dockerfile cybersec` then `docker run --rm -p 8000:8000 cybersec-env:latest`.
+
+---
+
+## License
+
+MIT — see `cybersec/pyproject.toml`.

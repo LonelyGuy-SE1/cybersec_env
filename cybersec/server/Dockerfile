@@ -30,6 +30,10 @@ COPY . /app/env
 # Install the env package itself from pyproject.toml.
 RUN pip install --upgrade pip && pip install .
 
+RUN useradd -m -u 1000 user
+USER user
+WORKDIR /home/user/app
+
 ENV PYTHONPATH="/app/env:${PYTHONPATH}"
 
 EXPOSE 8000

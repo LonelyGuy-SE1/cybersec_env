@@ -1,7 +1,7 @@
 """Training-side helpers shipped with the Cybersec OpenEnv environment.
 
 Anything in this subpackage is meant to be consumed by RL training scripts
-(notebooks, headless trainers, evaluation harnesses). The env itself
+(notebooks, the ``run_grpo`` headless trainer, evaluation harnesses). The env itself
 (`cybersec.server.CybersecEnvironment`) does not import from here, so the
 runtime stays free of training dependencies.
 

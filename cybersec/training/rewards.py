@@ -1,40 +1,30 @@
 """TRL-compatible reward functions for GRPO training of a defender LLM.
 
-This module is the single source of truth for every reward signal used to
-train the Cybersec OpenEnv defender. The runtime environment (in
-``cybersec.server``) does NOT import from here -- training rewards are a
-separate layer that operates on LLM completions, not on env transitions.
+This module defines reward signals used with Hugging Face TRL's
+``GRPOTrainer``. The live environment in ``cybersec.server`` does not import
+this module; training-time rewards are computed from LLM completions and
+optional dataset columns (snapshots, validity lists, etc.).
 
-Why six task-rewards plus two anti-collapse rewards?
+**Env-aligned signal:** :func:`reward_step_total` replays each candidate
+action against a pickled in-process environment and returns the scalar step
+reward from the server reward model.
 
-    The env itself returns a single scalar ``obs.reward`` per step (the
-    six-channel reward model in ``cybersec.server.reward_model``). That
-    scalar is plumbed back to the trainer via :func:`reward_step_total`,
-    which clones a snapshotted env and applies the candidate action. That
-    one function IS the env reward.
+**Completion-only signals:** JSON validity, schema checks, target
+membership, and similar terms provide dense feedback that does not require
+a full env step.
 
-    The other reward functions exist because GRPO scores text completions,
-    not env transitions. Things like "is the JSON parseable?" or "is the
-    target in ``valid_targets``?" are properties of the LLM's output, not
-    of the env's MDP. They give GRPO a dense, immediately-available signal
-    that the env reward cannot.
+**Dispersion signals:** :func:`reward_action_diversity`,
+:func:`reward_observation_aware`, and :func:`reward_batch_action_entropy`
+encourage varied, state-conditioned outputs and mitigate mode collapse in
+group-relative GRPO updates.
 
-    The two diversity rewards (:func:`reward_action_diversity` and
-    :func:`reward_observation_aware`) were added in iter-2 specifically to
-    counter the mode-collapse failure observed in iter-1: the trained
-    policy memorised a single deterministic action sequence that froze the
-    attacker on 2/3 scenarios with std=0 across 50 different seeds. The
-    diversity rewards make that behaviour costly during training without
-    changing the env.
-
-All reward functions match TRL's ``GRPOTrainer`` signature::
+All reward functions follow TRL's expected signature::
 
     fn(prompts, completions, **kw_from_dataset_columns) -> List[float]
 
-Per-row dataset columns (``valid_assets``, ``isolated_assets``,
-``env_snapshot``, ...) are forwarded to the function as keyword arguments
-of the same name. Missing kwargs default to lists of ``None`` / ``[]`` of
-the right length so reward funcs are robust to dataset shape changes.
+Dataset columns (``valid_assets``, ``env_snapshot``, ...) are passed
+through as keyword arguments. Missing keys are padded with ``None`` or
+empty lists per row.
 """
 
 from __future__ import annotations
@@ -394,7 +384,7 @@ def reward_avoids_exfil_path(
 
 
 # ---------------------------------------------------------------------------
-# Anti-collapse rewards (added in iter-2)
+# Dispersion and state-conditioning rewards
 # ---------------------------------------------------------------------------
 
 
@@ -407,18 +397,9 @@ def reward_action_diversity(prompts, completions, **kw) -> List[float]:
     candidates output the same ``ISOLATE_ASSET secrets-vault``, each one
     gets ``0.25``; if every candidate is unique, each gets ``1.0``.
 
-    Why this directly counters the iter-1 reward hack:
-
-        Iter-1 trained policy collapsed to a single deterministic action
-        sequence (``std_return = 0.0`` on 2/3 scenarios across 50 seeds).
-        Mode-collapse like that is rewarded in expectation by the six
-        task-rewards because the canned plan is genuinely high-EV. Adding
-        this term means the *gradient* prefers candidates that diverge
-        from their group siblings, breaking the symmetry that lets the
-        policy converge to a single text output.
-
-    Unparseable completions get ``0.0`` so this term cannot rescue
-    garbage output.
+    Identical actions within a prompt's candidate group share reward mass
+    (each receives ``1 / count``), so GRPO's relative comparison favours
+    breaking ties between siblings. Unparseable completions receive ``0.0``.
     """
 
     n = len(completions)
@@ -457,9 +438,8 @@ def reward_observation_aware(
 ) -> List[float]:
     """Reward state-conditioned behaviour: do something when alerts fire.
 
-    Penalises the trivial degenerate policy "always MONITOR regardless of
-    state" and the iter-1 hack "always emit the same containment regardless
-    of state". Concretely:
+    Penalises policies that ignore ``alert_count`` (e.g. always ``MONITOR``
+    under active alerts, or always isolating when quiet). Concretely:
 
       * alerts present, action != MONITOR, target in valid_assets   -> 1.0
       * alerts present, action == MONITOR                           -> 0.0
@@ -496,24 +476,13 @@ def reward_observation_aware(
 
 
 def reward_batch_action_entropy(prompts, completions, **kw) -> List[float]:
-    """Iter-4: per-completion bonus proportional to its action's batch rarity.
+    """Per-completion bonus from action rarity over the full training batch.
 
-    ``reward_action_diversity`` is a *prevention* reward: once the policy
-    is fully collapsed all candidates within a group are identical, so each
-    candidate scores ``1/K`` and the relative reward GRPO uses is flat.
-    There is no gradient pushing OUT of collapse.
-
-    This reward looks across the *whole training batch* (every prompt's
-    candidates pooled together) and returns ``log(N / count_of_action)``,
-    clipped to ``[0, 1]``. When the policy is fully collapsed across the
-    whole batch, every completion scores ``log(1) = 0`` -- but the moment
-    *one* candidate breaks symmetry it gets a bonus, and every other
-    candidate's reward drops, creating a relative-reward gap that GRPO
-    can follow.
-
-    Combined with a temperature >= 1.2 and ``num_generations >= 6``, this
-    is what actually frees the policy from iter-3-style 2-out-of-3
-    deterministic collapse.
+    Within-prompt diversity (:func:`reward_action_diversity`) is flat when
+    all candidates in a group match. This term pools actions across the
+    entire batch and assigns ``log(N / count_of_action)``, normalised to
+    ``[0, 1]``, then scaled by a constant so its magnitude is comparable to
+    other dense rewards. Values lie in ``[0, 2]`` with the default scale.
     """
 
     import math
@@ -542,7 +511,9 @@ def reward_batch_action_entropy(prompts, completions, **kw) -> List[float]:
         # log(n / c): n when c=1 (max bonus), 0 when c=n (full collapse)
         v = math.log(max(1, n) / c) / math.log(max(2, n))
         out.append(max(0.0, min(1.0, v)))
-    return out
+    # Scale so GRPO gradient from this term is comparable to dense format rewards.
+    scale = 2.0
+    return [x * scale for x in out]
 
 
 # ---------------------------------------------------------------------------
@@ -551,16 +522,9 @@ def reward_batch_action_entropy(prompts, completions, **kw) -> List[float]:
 
 
 def default_reward_funcs() -> List[Callable[..., List[float]]]:
-    """Canonical reward function list used by the unified GRPO notebook.
+    """Ordered list of reward functions for GRPO training.
 
-    Order is stable so ``training_log.json`` columns line up across runs.
-
-    Iter-2 added ``reward_action_diversity`` and ``reward_observation_aware``
-    as anti-collapse signals. Iter-3 results showed they were necessary
-    but not sufficient: the policy still collapsed on 2/3 train scenarios.
-    Iter-4 adds ``reward_batch_action_entropy``, a batch-wide entropy
-    bonus that gives a non-zero gradient OUT of collapse (the iter-2
-    rewards only prevented entry into collapse).
+    Order is stable so exported training logs remain comparable across runs.
     """
 
     return [
@@ -570,9 +534,6 @@ def default_reward_funcs() -> List[Callable[..., List[float]]]:
         reward_no_redundant_containment,
         reward_step_total,
         reward_avoids_exfil_path,
-        reward_action_diversity,
-        reward_observation_aware,
-        reward_batch_action_entropy,
     ]
 
 

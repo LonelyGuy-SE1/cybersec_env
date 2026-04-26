@@ -12,6 +12,7 @@ Public surface:
   * :class:`CybersecEnv`                                    - the persistent client
   * :func:`list_scenarios` / :func:`get_scenario`           - scenario catalog
   * :class:`AttackerPersonality`                            - the three archetypes
+  * :func:`list_attacker_personalities`                     - all personality enum members
 """
 
 from .__version__ import __version__
@@ -40,6 +41,12 @@ from .scenarios import (
     scenario_catalog,
 )
 
+
+def list_attacker_personalities() -> list[AttackerPersonality]:
+    """Return every :class:`AttackerPersonality` value (scripted attacker modes)."""
+    return list(AttackerPersonality)
+
+
 __all__ = [
     "__version__",
     "CybersecEnv",
@@ -62,4 +69,5 @@ __all__ = [
     "list_scenarios",
     "list_train_scenarios",
     "scenario_catalog",
+    "list_attacker_personalities",
 ]
