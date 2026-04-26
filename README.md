@@ -1,78 +1,149 @@
-# Cybersec OpenEnv: Teaching Small LLMs Surgical Cyber-Defense
+<div align="center">
 
-▶️ **Play the Environment:** [huggingface.co/spaces/Lonelyguyse1/cybersec](https://huggingface.co/spaces/Lonelyguyse1/cybersec) — HTTP examples and reset semantics: [`cybersec/README.md`](cybersec/README.md)
+<img src="https://img.shields.io/badge/Model-Qwen2.5--1.5B-blueviolet?style=for-the-badge&logo=huggingface&logoColor=white" />
+<img src="https://img.shields.io/badge/Algorithm-GRPO-ff6b35?style=for-the-badge" />
+<img src="https://img.shields.io/badge/Framework-MITRE%20ATT%26CK-cc0000?style=for-the-badge" />
+<img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" />
+<img src="https://img.shields.io/badge/GPU-T4%20Colab-F9AB00?style=for-the-badge&logo=googlecolab&logoColor=white" />
 
-📝 **Blog (design narrative, reward exploits, fixes):** [BLOG.md](BLOG.md) — *Teaching a 1.5B LLM to be a SOC Analyst (Without Burning Down the Network)* · [on GitHub](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/BLOG.md)
+<br /><br />
 
-🧪 **Training Notebook:** [notebooks/cybersec_grpo.ipynb](notebooks/cybersec_grpo.ipynb) — Colab-ready, runs end-to-end on a T4 GPU
+```
+ ██████╗██╗   ██╗██████╗ ███████╗██████╗ ███████╗███████╗ ██████╗
+██╔════╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗██╔════╝██╔════╝██╔════╝
+██║      ╚████╔╝ ██████╔╝█████╗  ██████╔╝███████╗█████╗  ██║
+██║       ╚██╔╝  ██╔══██╗██╔══╝  ██╔══██╗╚════██║██╔══╝  ██║
+╚██████╗   ██║   ██████╔╝███████╗██║  ██║███████║███████╗╚██████╗
+ ╚═════╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝
+                        O P E N E N V
+```
+
+### *Teaching Small LLMs Surgical Cyber-Defense*
+
+**A long-horizon, adversarial RL environment where a 1.5B-parameter model learns to think like a senior SOC analyst — without burning down the network.**
+
+<br />
+
+[**Play the Live Environment**](https://huggingface.co/spaces/Lonelyguyse1/cybersec) &nbsp;|&nbsp; [**Design Blog**](BLOG.md) &nbsp;|&nbsp; [**Training notebook (Colab)**](https://colab.research.google.com/github/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo.ipynb)
+
+</div>
 
 ---
 
-## 1. The Origin Story: Why I Built This
+## Table of contents
 
-Thanks to the rise of powerful SOTA models like Mythos, Opus, and rapidly improving open-source frontier models, almost anyone has gained access to a tool of immense intelligence. This brings incredible benefits—accelerating research, building applications faster, and decreasing workloads. But it also arms bad actors. 
+1. [Why I built this](#1-why-i-built-this)
+2. [The small model manifesto](#2-the-small-model-manifesto)
+3. [Environment: technical specs](#3-environment-technical-specs)
+   - [Scenarios](#scenarios)
+   - [The adversary (scripted)](#the-adversary-scripted)
+   - [The defender & action space](#the-defender-the-llm--action-space)
+   - [Observation & action schema](#observation--action-schema)
+4. [Training methodology](#4-training-methodology)
+   - [Reward model (7 channels)](#the-reward-model-7-channels)
+   - [The disruption exploit & the fix](#the-disruption-exploit--the-fix)
+5. [Results](#5-results)
+6. [Evaluation tasks & grading](#6-evaluation-tasks--grading)
+7. [Notebooks](#7-notebooks)
+8. [Quickstart](#8-quickstart)
+9. [Running the server](#9-running-the-server)
 
-I am already seeing this play out with recent attacks on major internet infrastructure. Some of these attackers are absolute amateurs, purely harnessing AI to penetrate systems. Software I thought was secure for years has been broken open (e.g., Project Glassdoor / Mythos finding 0-days in established codebases with millions of lines of code). The only way to protect a system in real-time against an AI-augmented threat is to deploy a 24/7 AI guard of my own.
+---
 
-But to train that guard, I need a realistic environment. Training an RL agent on a live production network is incredibly risky and expensive. Existing cyber environments often lack an adaptive, multi-agent adversarial attacker, treating cybersecurity as a static point-in-time classification task ("is this payload bad?"). I built **Cybersec OpenEnv** to simulate the real "fog of war" in a Security Operations Center (SOC): long-horizon attacks, delayed telemetry, and the very real business cost of taking systems offline.
+## 1. Why I built this
 
-## 2. The Small Model Manifesto
+> *The only way to protect a system in real-time against an AI-augmented threat is to deploy a 24/7 AI guard of your own.*
 
-Why use a tiny `Qwen2.5-1.5B-Instruct` model instead of a 70B parameter behemoth?
+Thanks to the rise of powerful SOTA models, almost anyone now has access to a tool of immense intelligence. This is incredible — but it also arms bad actors. I have watched this play out firsthand with recent attacks on major internet infrastructure, where absolute amateurs, purely harnessing AI, penetrate systems that had been considered hardened for years. Projects like Mythos have found 0-days in established codebases with millions of lines of code.
 
-1. **Iteration Speed & Compute:** Real-world systems run on constraints. To get multiple iterations of RL training and testing done, a large model is simply too slow and compute-heavy for a single consumer GPU (like a Colab T4).
-2. **Privacy & Security:** When it comes to enterprise security, you do not want to take chances by streaming your internal network topology and sensitive telemetry to an external API provider. It is fundamentally safer to use local, air-gapped models.
-3. **Edge Deployment:** Loading a 70B model locally isn't viable for mass adoption in standard enterprise environments. If I want autonomous SOC agents deployed everywhere, I have to make this work with smaller, hyper-efficient models.
+Existing cyber environments treat the problem as a **static, point-in-time classification task** ("is this payload bad?"). Real attacks don't work that way. Attackers plan, gather intelligence, wait, and pivot across systems over days or weeks.
 
-## 3. The Environment: Technical Specs
+**Cybersec OpenEnv** was built to simulate the real *fog of war* inside a Security Operations Center:
 
-This is a long-horizon, partially observable Markov decision process (POMDP) where two agents interact within an enterprise network topology. The environment emphasizes **long-horizon planning**: staged attacks (credential theft, dwell time, lateral pivots, exfiltration) unfold over many ticks with stochastic timing, and early signals can be incredibly weak.
+- **Long-horizon attacks** — staged, multi-step campaigns that unfold over many environment ticks
+- **Delayed telemetry** — early signals are deliberately weak and noisy
+- **Real business costs** — taking systems offline has consequences, modeled explicitly
 
-### The Scenarios
-The environment includes three training scenarios and one held-out scenario for out-of-distribution evaluation, all based on real MITRE ATT&CK techniques:
+Training an RL agent on a live production network is risky and expensive. This environment makes that training safe, fast, and reproducible.
 
-**Training Scenarios**
-| ID | Title | Stages | Horizon |
-|---|---|---|---|
+---
+
+## 2. The small model manifesto
+
+The defender is a **`Qwen2.5-1.5B-Instruct`** model — not a 70B behemoth. Here's why that's a feature, not a limitation:
+
+| Constraint | Why it matters |
+|------------|----------------|
+| **Iteration speed** | Multiple RL training cycles fit on a single Colab T4 GPU |
+| **Privacy & security** | No sensitive network telemetry ever has to leave your infrastructure to an external API |
+| **Edge deployment** | 70B models aren't viable for mass enterprise adoption; this is built for the real world |
+
+The goal: prove that small, open-source LLMs can be fine-tuned to reason like **risk-aware senior SOC analysts**.
+
+---
+
+## 3. Environment: technical specs
+
+Cybersec OpenEnv is a **long-horizon, partially observable Markov decision process (POMDP)** in which two agents — a scripted adversary and an LLM defender — interact within a simulated enterprise network.
+
+The core challenge: **staged attacks unfold over many ticks with stochastic timing, and early compromise signals can be extremely weak.**
+
+Full HTTP examples, reset semantics, and the **OpenEnv Space card** live in **[`cybersec/README.md`](cybersec/README.md)** (same layout style as [OpenEnv wildfire_env](https://github.com/meta-pytorch/OpenEnv/tree/main/envs/wildfire_env)).
+
+### Scenarios
+
+Three training scenarios and one held-out evaluation scenario (counts and horizons match `cybersec/scenarios.py`):
+
+**Training**
+
+| ID | Campaign | Stages | Horizon |
+|----|----------|:------:|:-------:|
 | `supply_chain_token_drift` | CI-token theft → poisoned artifact → payments pivot → warehouse exfil | 5 | 70 |
 | `federated_identity_takeover` | Spearphish → MFA fatigue → helpdesk pivot → HR portal → cloud-egress exfil | 5 | 70 |
 | `insider_repo_pivot` | Repo recon → secret harvest → staging → prod cluster → DB exfil | 6 | 80 |
 
-**Held-out (Evaluation-only) Scenario**
-| ID | Title | Stages | Horizon |
-|---|---|---|---|
+**Held-out (evaluation only)**
+
+| ID | Campaign | Stages | Horizon |
+|----|----------|:------:|:-------:|
 | `cloud_metadata_ssrf` | SSRF → cloud metadata → role-chain → KMS replicate → cloud storage exfil | 5 | 70 |
 
-### The Adversary (Scripted)
-The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG) for the given scenario. Each node in the DAG represents a sequential attack stage the adversary must complete to reach their exfiltration goal. To simulate realism, the attacker is assigned one of three personalities (its sample space):
+### The adversary (scripted)
 
-| Personality     | Dwell × | Detection × | Pause-after-defender | Reroutes |
-|---|---|---|---|---|
-| `stealthy`      | 1.5×    | 0.55×       | 50%                 | no       |
-| `aggressive`    | 0.6×    | 1.30×       | 0%                  | no       |
-| `opportunistic` | 1.0×    | 1.0×        | 15%                 | yes      |
+The attacker walks a **deterministic MITRE ATT&CK-aligned directed acyclic graph (DAG)**. Each node is a sequential stage the attacker must complete to reach exfiltration. One of three personalities is sampled per episode (unless overridden on `reset`):
 
-### The Defender (The LLM) & Action Space
-The LLM reads partial observations (lagged **alerts**, **forensics** from past `INVESTIGATE` calls, containment state, and **`valid_targets`** as `{"assets": [...], "identities": [...]}`**) and chooses one structured **JSON** action per tick (training uses a single-line object; see `cybersec/training/rewards.py` `SYSTEM_PROMPT`).
+| Personality | Dwell time | Detection risk | Pauses after defender | Reroutes? |
+|-------------|:----------:|:----------------:|:---------------------:|:---------:|
+| `stealthy` | 1.5× slower | 0.55× lower | 50% chance | No |
+| `aggressive` | 0.6× faster | 1.30× higher | Never | No |
+| `opportunistic` | Baseline | Baseline | 15% chance | Yes |
 
-| Action            | Target           | Effect |
-|---|---|---|
-| `MONITOR`         | (none)           | Low cost; advances time and observations. |
-| `INVESTIGATE`     | asset / identity | Noisy forensic signal on the target. |
-| `ISOLATE_ASSET`   | asset            | Quarantine; can interrupt in-progress stages. |
-| `REVOKE_IDENTITY` | identity         | Revoke credentials; blocks identity pivots. |
-| `BLOCK_EGRESS`    | asset            | Containment oriented to exfiltration. |
-| `PATCH_ASSET`     | asset            | One-shot hardening; lowers stage success odds. |
+### The defender (the LLM) & action space
 
-**HTTP / OpenEnv web UI:** actions are posted as `{"action": {"action_type": "...", "target": "..."}}` under the Space **`/web`** prefix (e.g. `POST …/web/step`). Full examples and scenario IDs: [`cybersec/README.md`](cybersec/README.md) (also the Hugging Face Space card).
+Each tick, the LLM receives a **partial observation** — lagged alerts, forensic results from past `INVESTIGATE` calls, containment state, and **`valid_targets`** as `{"assets": [...], "identities": [...]}` — and must emit a single structured JSON action (see `SYSTEM_PROMPT` in `cybersec/training/rewards.py`).
 
-Illustrative shapes (field names match `cybersec/models.py`; alert `signal` values are enums such as `auth_anomaly`, `lateral_movement`, `egress_anomaly`):
+| Action | Target | Effect |
+|--------|--------|--------|
+| `MONITOR` | *(none)* | Low-cost; advances time and accumulates new observations |
+| `INVESTIGATE` | asset / identity | Returns a noisy forensic signal on the target |
+| `ISOLATE_ASSET` | asset | Quarantines the asset; can interrupt in-progress attack stages |
+| `REVOKE_IDENTITY` | identity | Revokes credentials; blocks identity-based pivots |
+| `BLOCK_EGRESS` | asset | Containment focused on preventing data exfiltration |
+| `PATCH_ASSET` | asset | One-shot hardening; lowers future stage success probability |
+
+> Invalid or out-of-set targets **still consume a tick** and incur an **`invalid_action_penalty`** (`cybersec/reward.py`).
+
+### Observation & action schema
+
+<details>
+<summary><strong>Expand: example observation (tick 4 of <code>federated_identity_takeover</code>)</strong></summary>
 
 ```json
 {
   "tick": 4,
   "horizon": 70,
   "scenario_id": "federated_identity_takeover",
+  "attacker_personality": "stealthy",
   "alerts": [
     {
       "tick": 4,
@@ -91,93 +162,203 @@ Illustrative shapes (field names match `cybersec/models.py`; alert `signal` valu
 }
 ```
 
+</details>
+
+<details>
+<summary><strong>Expand: example LLM completion (training)</strong></summary>
+
 ```json
 {"action_type": "INVESTIGATE", "target": "u-platform-eng"}
 ```
 
-After a forensic row exists, the model might emit `REVOKE_IDENTITY` / `ISOLATE_ASSET` with a target that still appears under `valid_targets`. Invalid or out-of-set targets **still consume a tick** and draw `invalid_action_penalty` (see `cybersec/reward.py`).
+After a forensic row is confirmed, the model might follow with:
 
-### Reset & scenario selection
-On **`reset`**, you may pass **`scenario_id`** (one of the four IDs above), **`seed`** (int, for reproducibility), and optionally **`attacker_personality`**. If **`scenario_id`** is omitted, the env picks a scenario from `list_scenarios()` using the episode RNG (with today’s server: omitting **`seed`** draws a fresh random seed each reset so HTTP clients are not pinned to a single scenario). Optional process env **`CYBERSEC_SCENARIO_ID`** on the server sets a default scenario when the client omits `scenario_id`. Details: `cybersec/server/cybersec_environment.py`, `cybersec/server/app.py`.
+```json
+{"action_type": "REVOKE_IDENTITY", "target": "u-platform-eng"}
+```
 
-## 4. Training Methodology
+</details>
 
-I used **Group Relative Policy Optimization (GRPO)** via Hugging Face TRL and Unsloth (4-bit QLoRA) to train the LLM. 
+**HTTP / OpenEnv web UI:** actions are posted as `{"action": {"action_type": "...", "target": "..."}}` to **`POST …/web/step`**. See [`cybersec/README.md`](cybersec/README.md) for curl examples.
 
-### The Reward Model (7 Channels)
-Instead of a sparse 0/1 win/loss reward, the environment provides a dense 7-channel reward signal:
-
-| Channel                    | Sign | Role |
-|---|---|---|
-| `detection`               | +    | First confirmed compromise of an attacker target |
-| `containment`             | +/-  | Active and preemptive containment, net of action cost |
-| `evidence_bonus`          | +    | Containment actions on targets previously confirmed via INVESTIGATE |
-| `false_positive_penalty`  | −    | Containment on non-attack-path targets |
-| `disruption_penalty`      | −    | Operational cost of isolations and egress blocks |
-| `invalid_action_penalty`  | −    | Illegal actions (bad target, wrong type for verb, etc.); still consumes a tick |
-| `terminal_score`          | ±    | Episode outcome: clean resolution vs exfiltration |
-
-### The Struggle: The Disruption Exploit
-During my initial GRPO training loop, the model achieved a massive score, but I noticed the standard deviation of the returns across the batch was exactly `0.0`. 
-
-The LLM had found a degenerate cheat code. Because the "disruption penalty" (the cost of taking a business asset offline) had a hard cap per tick, the mathematically optimal move was to instantly `ISOLATE_ASSET` every single server in the company at Tick 0. The LLM essentially said, *"I solved the hack by unplugging the internet."*
-
-**The Fix:** I removed the disruption cap, forcing a linearly scaling penalty for every isolated asset. I also added an **evidence-based containment bonus**: the model receives a +1.5 reward for containing targets it has *already confirmed compromised* via `INVESTIGATE`. This means "surgically investigate then contain" scores higher than "blindly isolate everything on tick 0." I also threw out the static offline dataset and restructured the training into **On-Policy Iterative Self-Play Loops**:
-* **Outer Loop 0 (The Warmup):** The environment runs a deterministic Heuristic Policy to generate an initial 1,500 rows of training data. The model performs its first batch of GRPO optimizer steps on this dataset just to learn the JSON schema and basic mechanics.
-* **Outer Loop 1+ (True RL):** The LLM takes the wheel. It generates a fresh 1,500 rows of data by playing the environment itself using its own weights at a high temperature (`1.4`). Because it makes mistakes and explores new states, the model is forced to actually read the telemetry, endure the pain of false positive penalties, and learn surgical defense in order to find a true mathematical advantage.
-
-To prevent mode collapse into repetitive actions, the GRPO reward function includes three **dispersion signals**: `reward_action_diversity` (penalises uniform outputs within a candidate group), `reward_observation_aware` (rewards state-conditioned responses to alerts), and `reward_evidence_containment` (a dense proxy for the evidence bonus, reinforcing the investigate-then-contain workflow).
-
-## 5. Tasks & Grading
-
-The environment evaluates the defender across three programmatic tasks:
-* **Detection Task:** Accurately identifying and confirming compromised targets. Scored by true positive confirmations.
-* **Containment Task:** Successfully blocking an attacker's in-progress lateral movement or exfiltration. Scored by the number of attack stages prevented.
-* **Survival Task:** Preventing the attacker from completing the exfiltration stage. Scored via a massive terminal penalty if exfiltration occurs, or a survival bonus if the network is preserved.
-
-## 6. The Vibe & Takeaway
-
-The potential of multi-agent, long-horizon adaptive systems is massive. An attacker rarely strikes all at once; they plan, gather info, wait, and pivot. By successfully training a 1.5B parameter model to navigate this environment without burning down the network, I've proven that small, open-source LLMs can be fine-tuned to reason like senior, risk-aware SOC analysts. 
+**Reset parameters:** optional `scenario_id`, `seed`, `attacker_personality` on **`POST …/web/reset`**. If **`scenario_id`** is omitted, the server uses **`CYBERSEC_SCENARIO_ID`** when set; otherwise the scenario index is derived from the episode RNG. If **`seed`** is omitted, a **fresh random seed** is drawn each reset (so bare `{}` is not stuck on a single scenario). Details: `cybersec/server/cybersec_environment.py`, `cybersec/server/app.py`.
 
 ---
 
-## Install and train
+## 4. Training methodology
+
+Training uses **Group Relative Policy Optimization (GRPO)** via Hugging Face **TRL** and **Unsloth** (4-bit QLoRA), runnable end-to-end on a single T4-class GPU.
+
+### The reward model (7 channels)
+
+Rather than sparse 0/1 win/loss feedback, the environment exposes a **dense 7-channel** signal every tick (`obs.info["reward_breakdown"]`):
+
+| Channel | Sign | Purpose |
+|---------|:----:|---------|
+| `detection` | + | First confirmed compromise of an attacker target |
+| `containment` | +/− | Net reward for active and preemptive containment, minus action cost |
+| `evidence_bonus` | + | Extra reward for containing targets **already confirmed** via `INVESTIGATE` |
+| `false_positive_penalty` | − | Penalty for containment on non-attack-path targets |
+| `disruption_penalty` | − | Operational cost of isolations and egress blocks |
+| `invalid_action_penalty` | − | Illegal actions (bad target, wrong verb type, etc.) |
+| `terminal_score` | ± | Episode outcome: clean resolution bonus vs exfiltration penalty |
+
+### The disruption exploit & the fix
+
+> **The model found a degenerate cheat code.**
+
+During initial GRPO training, the policy achieved a high average return — but the **standard deviation of returns across the batch was exactly `0.0`**. Every rollout was scoring identically.
+
+The LLM had discovered that isolating every asset on the network at **Tick 0** — completely nuking the entire business — was the mathematically optimal play under the original reward function. The disruption penalty had a hard per-tick cap, making mass isolation cheap at scale.
+
+*"I solved the hack by unplugging the internet."*
+
+**Three fixes, applied together:**
+
+1. **Remove the disruption cap** — penalty scales with isolation load (default uncapped in `RewardWeights.disruption_cap_per_tick`).
+2. **Evidence-based containment bonus** — containing a target already confirmed via `INVESTIGATE` yields **`evidence_bonus_per_target`** (default 1.5 in `reward.py`); blind Tick-0 isolation does not.
+3. **On-policy iterative self-play** — no static offline dataset for the outer loops.
+
+**Training loop (high level):**
+
+```
+Outer loop 0 (warmup)
+└── Heuristic policy generates seed rows (e.g. 1,500)
+└── GRPO steps: model learns JSON schema and mechanics
+
+Outer loop 1+ (true RL)
+└── LLM rollouts at high temperature (~1.4 in default MODE)
+└── Fresh rows each loop; mistakes + false positives provide signal
+```
+
+GRPO training also uses **dispersion / shaping** helpers in `cybersec/training/rewards.py` (e.g. `reward_action_diversity`, `reward_observation_aware`, `reward_batch_action_entropy`, `reward_evidence_containment`) so groups retain variance. See **[BLOG.md](BLOG.md)** for the full narrative.
+
+---
+
+## 5. Results
+
+> Training curves, per-scenario breakdowns, and ablation tables will be filled in after the current training run completes.
+
+### Training performance
+
+| Metric | Outer loop 0 (heuristic) | Outer loop 1+ (self-play) |
+|--------|:------------------------:|:-------------------------:|
+| Mean episode reward | — | — |
+| Detection rate | — | — |
+| False positive rate | — | — |
+| Exfiltration prevented | — | — |
+
+### Per-scenario breakdown
+
+| Scenario | Attacker personality | Stages stopped | Exfil prevented | Terminal outcome |
+|----------|----------------------|:--------------:|:----------------:|:----------------:|
+| `supply_chain_token_drift` | — | — | — | — |
+| `federated_identity_takeover` | — | — | — | — |
+| `insider_repo_pivot` | — | — | — | — |
+| `cloud_metadata_ssrf` *(held-out)* | — | — | — | — |
+
+### Reward channel ablation
+
+| Ablation | Mean reward | Std dev | Exploit present? |
+|----------|:-----------:|:-------:|:-----------------:|
+| Baseline (capped disruption) | — | 0.0 | Yes |
+| + Linear disruption penalty | — | — | — |
+| + Evidence containment bonus | — | — | — |
+| + Dispersion signals (full) | — | — | — |
+
+---
+
+## 6. Evaluation tasks & grading
+
+The trained defender is evaluated along three axes (see notebook metrics and `run_episode` diagnostics):
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    EVALUATION FRAMEWORK                           │
+├──────────────────┬──────────────────────┬───────────────────────┤
+│  DETECTION       │  CONTAINMENT         │  SURVIVAL               │
+│                  │                      │                         │
+│  Identify and    │  Block in-progress   │  Prevent final          │
+│  confirm         │  lateral movement    │  exfiltration stage.    │
+│  compromised     │  or exfiltration     │                         │
+│  targets.        │  attempts.           │  Terminal penalty on    │
+│                  │                      │  failure; bonus on      │
+│  True-positive   │  Stages prevented.   │  clean resolution.      │
+│  style signals.  │                      │                         │
+└──────────────────┴──────────────────────┴─────────────────────────┘
+```
+
+---
+
+## 7. Notebooks
+
+The **[`notebooks/`](notebooks/)** directory is meant to hold **two** Jupyter flows:
+
+| Notebook | Role |
+|----------|------|
+| **[`notebooks/cybersec_grpo.ipynb`](notebooks/cybersec_grpo.ipynb)** | **Full pipeline:** install/runtime, baselines, Unsloth load, outer-loop GRPO, base vs trained LLM eval, plots, optional **strict canary** asserts. Same algorithm as [`scripts/train_cybersec_grpo.py`](scripts/train_cybersec_grpo.py). [Open in Colab](https://colab.research.google.com/github/LonelyGuy-SE1/cybersec_env/blob/main/notebooks/cybersec_grpo.ipynb). |
+| **`notebooks/cybersec_grpo_post_train.ipynb`** *(recommended snapshot name)* | **Post-training only:** duplicate the main notebook after a successful run, then **delete or skip** cells through training; keep artifact paths, adapter load, eval, and plots so you can re-run evaluation **without** retraining. **Add this file when you freeze a post-train copy** — it is not committed by default so the repo does not drift from your last artifact layout. |
+
+**Headless training** (no notebook): from repo root,
+
+```bash
+python scripts/train_cybersec_grpo.py --output-dir ./_artifacts
+```
+
+---
+
+## 8. Quickstart
+
+**Install and run tests:**
 
 ```bash
 pip install -e ./cybersec[dev]
 pytest -q
 ```
 
-**Dependencies** (from repo root; match your CUDA):
+**Install training dependencies** (match your CUDA / Unsloth install instructions):
 
 ```bash
 pip install -e "./cybersec[grpo]"
 pip install "unsloth[cu121] @ git+https://github.com/unslothai/unsloth.git"
 ```
 
-**Run the iterative on-policy training script**
+**Outputs (training script or notebook):**
 
-```bash
-python scripts/train_cybersec_grpo.py --output-dir ./_artifacts
-```
-
-Outputs: `qwen_cybersec_lora/`, `training_log.json`, `run_manifest.json`, per-outer checkpoints under `grpo_checkpoints_outer*`.
-
-**Notebook (Colab / Jupyter)** — same algorithm, baselines, plots, eval: [notebooks/cybersec_grpo.ipynb](notebooks/cybersec_grpo.ipynb).
+| Path | Contents |
+|------|----------|
+| `qwen_cybersec_lora/` (or `ARTIFACTS` / `_artifacts`) | LoRA adapter + tokenizer |
+| `training_log.json` | GRPO log history |
+| `run_manifest.json` | Run configuration |
+| `grpo_checkpoints_outer*/` | Checkpoints per outer loop |
 
 ---
 
-## Server
+## 9. Running the server
+
+**Local:**
 
 ```bash
 cybersec-server
 ```
 
-Docker: `docker build -t cybersec-env:latest -f cybersec/server/Dockerfile cybersec` then `docker run --rm -p 8000:8000 cybersec-env:latest`.
+**Docker:**
 
-On **Hugging Face Spaces**, the packaged app is mounted at **`base_path: /web`**, so health and OpenEnv routes are under **`/web`** (e.g. `/web/reset`, `/web/step`, `/web/ws`). See [`cybersec/README.md`](cybersec/README.md) for curl-style examples.
+```bash
+docker build -t cybersec-env:latest -f cybersec/server/Dockerfile cybersec
+docker run --rm -p 8000:8000 cybersec-env:latest
+```
+
+> **Hugging Face Spaces:** the served app uses **`base_path: /web`** (see `cybersec/README.md` frontmatter). Routes are **`/web/reset`**, **`/web/step`**, **`/web/ws`**, etc.
 
 ---
 
-## License
-MIT — see `cybersec/pyproject.toml`.
+<div align="center">
+
+**License:** MIT — see [`cybersec/pyproject.toml`](cybersec/pyproject.toml)
+
+<br />
+
+*Built to show that small, local, privacy-preserving models can match the reasoning of senior SOC analysts — tick by tick.*
+
+</div>
