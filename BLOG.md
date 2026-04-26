@@ -102,7 +102,7 @@ After 120 optimizer steps across 2 outer loops, the numbers:
 
 But the result that matters is this one.
 
-![Aggregate before/after GRPO — training scenarios (left) vs held-out OOD scenario (right)](assets/aggregate_performance.png)
+![Aggregate before/after GRPO — training scenarios (left) vs held-out OOD scenario (right)](https://cdn-uploads.huggingface.co/production/uploads/691defbd159b76f65d1e8161/enYBdNrpQ2CBdkutGbOiR.png)
 
 On the **training scenarios** (left panel), the fine-tuned policy performs on par with the zero-shot base model. That's expected — 120 optimizer steps on three scenarios is a light training budget.
 
@@ -134,5 +134,9 @@ The broader point: the combination of a realistic long-horizon environment, a we
 ---
 
 **Play the environment:** [huggingface.co/spaces/Lonelyguyse1/cybersec](https://huggingface.co/spaces/Lonelyguyse1/cybersec)  
+
 **Repo & training notebook:** [github.com/LonelyGuy-SE1/cybersec_env](https://github.com/LonelyGuy-SE1/cybersec_env)  
+
 **API reference:** [`cybersec/README.md`](https://github.com/LonelyGuy-SE1/cybersec_env/blob/main/cybersec/README.md)
+
+**Final Training Script/ Notebook:** [Colab](https://colab.research.google.com/drive/1HUoMWXAYgB3rAt4rQ9tiyVIByfktx5ed?usp=sharing)
