@@ -2,6 +2,7 @@
 
 <img src="https://img.shields.io/badge/Model-Qwen2.5--1.5B-blueviolet?style=for-the-badge&logo=huggingface&logoColor=white" />
 <img src="https://img.shields.io/badge/Algorithm-GRPO-ff6b35?style=for-the-badge" />
+<img src="https://img.shields.io/badge/Framework-OpenEnv-ff5c00?style=for-the-badge" />
 <img src="https://img.shields.io/badge/Framework-MITRE%20ATT%26CK-cc0000?style=for-the-badge" />
 <img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" />
 <img src="https://img.shields.io/badge/GPU-T4%20Colab-F9AB00?style=for-the-badge&logo=googlecolab&logoColor=white" />
