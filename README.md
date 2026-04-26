@@ -21,10 +21,10 @@
  
 **A long-horizon, adversarial RL environment where a 1.5B-parameter model learns to think like a senior SOC analyst — without burning down the network.**
  
-<br />
-> 🔑 **Key result:** Fine-tuned on 3 attack scenarios, the trained policy was dropped cold into a **4th scenario it had never seen** — and beat every baseline, including the hand-crafted heuristic (+2.43) and the zero-shot base model. General defensive reasoning, not memorisation.
+---
+🔑 **Key result:** Fine-tuned on 3 attack scenarios, the trained policy was dropped cold into a **4th scenario it had never seen** — and beat every baseline, including the hand-crafted heuristic (+2.43) and the zero-shot base model. General defensive reasoning, not memorisation.
  
-<br />
+---
 [**▶ Play the Live Environment**](https://huggingface.co/spaces/Lonelyguyse1/cybersec) &nbsp;|&nbsp; [**📝 Design Blog**](BLOG.md) &nbsp;|&nbsp; [**🧪 Training Notebook**](notebooks/cybersec_grpo.ipynb)
  
 </div>
