@@ -11,7 +11,7 @@ description: >
   environment. The defender (the trainable agent) faces a scripted attacker
   walking a MITRE ATT&CK-aligned stage DAG with stochastic dwell times and
   detection delays. Three scenarios, three attacker personalities, six
-  defender actions, six-channel reward.
+  defender actions, seven-channel reward (see reward.py).
 
 env:
   CYBERSEC_HOST: "0.0.0.0"
