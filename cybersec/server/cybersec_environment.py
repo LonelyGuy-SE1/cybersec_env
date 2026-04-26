@@ -13,7 +13,11 @@ Per OpenEnv contract this class implements ``reset(seed, episode_id, **kw)``,
 Reset accepts two keyword overrides:
 
   ``scenario_id``         - one of :func:`scenarios.list_scenarios`. If
-                             omitted, scenarios cycle deterministically by seed.
+                             omitted, pick ``list_scenarios()[seed % n]`` when
+                             ``seed`` is set; if ``seed`` is also omitted, a
+                             random seed is drawn so each reset can vary (HTTP
+                             clients that omit both are not stuck on the first
+                             scenario).
   ``attacker_personality``- a :class:`AttackerPersonality` value. Sampled by
                              RNG if omitted.
 
@@ -32,6 +36,7 @@ official ``openenv init`` template layout.
 from __future__ import annotations
 
 import random
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
@@ -153,7 +158,12 @@ class CybersecEnvironment(Environment[CybersecAction, CybersecObservation, Cyber
         episode_id: Optional[str] = None,
         **kwargs: Any,
     ) -> CybersecObservation:
-        rng_seed = 0 if seed is None else int(seed)
+        # OpenEnv HTTP reset often omits seed; rng_seed=0 would force scenario
+        # list_scenarios()[0] every time (supply_chain_token_drift).
+        if seed is None:
+            rng_seed = secrets.randbits(31)
+        else:
+            rng_seed = int(seed)
         self._rng = random.Random(rng_seed)
 
         scenario_id = kwargs.get("scenario_id") or self._default_scenario_id
@@ -219,6 +229,9 @@ class CybersecEnvironment(Environment[CybersecAction, CybersecObservation, Cyber
             signals.false_positive_count += fp_count
             if was_containment:
                 signals.containment_action_count = 1
+                # Evidence bonus: containing a target already confirmed compromised
+                if action.target and action.target in world.confirmed_compromised:
+                    signals.containment_on_confirmed += 1
             if action.action_type is not ActionType.MONITOR:
                 world.defender_acted_at_least_once = True
 

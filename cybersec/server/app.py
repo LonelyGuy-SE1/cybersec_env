@@ -13,7 +13,9 @@ Endpoints (provided by ``openenv.core.env_server.create_app``):
 
 Configuration knobs (read at process start, not per-request):
 
-  ``CYBERSEC_SCENARIO_ID``          - default scenario; if unset, scenarios cycle by seed.
+  ``CYBERSEC_SCENARIO_ID``          - default scenario; if unset, scenario follows
+                                      reset ``seed`` (see ``CybersecEnvironment.reset``;
+                                      omitted seed uses a random seed per reset).
   ``CYBERSEC_ATTACKER_PERSONALITY`` - default personality; if unset, sampled by RNG.
   ``CYBERSEC_MAX_CONCURRENT_ENVS``  - max concurrent WebSocket sessions (default 8).
 """

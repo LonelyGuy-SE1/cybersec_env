@@ -341,7 +341,7 @@ def reward_step_total(
             r = float(obs.reward or 0.0)
         except Exception:
             r = -1.0
-        out.append(max(-5.0, min(5.0, r)))
+        out.append(max(-2.0, min(2.0, r)))
     return out
 
 
@@ -378,6 +378,65 @@ def reward_avoids_exfil_path(
             out.append(0.5)
         elif (n_alerts or 0) > 0 and action.action_type is ActionType.INVESTIGATE:
             out.append(0.3)
+        else:
+            out.append(0.0)
+    return out
+
+
+def reward_evidence_containment(
+    prompts,
+    completions,
+    isolated_assets: Optional[Sequence] = None,
+    revoked_identities: Optional[Sequence] = None,
+    blocked_egress: Optional[Sequence] = None,
+    patched: Optional[Sequence] = None,
+    alert_count: Optional[Sequence[int]] = None,
+    **kw,
+) -> List[float]:
+    """Bonus for containment actions that align with prior investigation evidence.
+
+    In the real env, the evidence bonus fires when the defender contains a
+    target already in ``confirmed_compromised``. During GRPO training, we
+    don't have the exact confirmed-compromised list in the dataset row, so
+    we use a proxy: reward containment actions when alerts are present
+    (indicating the defender is reacting to evidence rather than acting blindly).
+
+    The proxy is deliberately conservative:
+      * No alerts + containment  -> 0.0 (looks like blind containment)
+      * Alerts + containment on a non-redundant target -> 0.8
+      * Alerts + INVESTIGATE -> 0.4 (investigating is the first step)
+      * Alerts + MONITOR -> 0.0 (not acting on evidence)
+    """
+
+    n = len(completions)
+    alert_count = _coerce_list(alert_count, n, 0)
+    isolated_assets = _coerce_list(isolated_assets, n, [])
+    revoked_identities = _coerce_list(revoked_identities, n, [])
+    containment_types = {
+        ActionType.ISOLATE_ASSET,
+        ActionType.REVOKE_IDENTITY,
+        ActionType.BLOCK_EGRESS,
+        ActionType.PATCH_ASSET,
+    }
+    out: List[float] = []
+    for c, n_alerts, iso, rev in zip(completions, alert_count, isolated_assets, revoked_identities):
+        action = parsed_action(c)
+        if action is None:
+            out.append(0.0)
+            continue
+        alerts = int(n_alerts or 0)
+        if alerts == 0:
+            out.append(0.0)
+            continue
+        if action.action_type in containment_types:
+            # Check target isn't already contained (redundant)
+            already = set(iso or []) | set(rev or [])
+            if action.target and action.target not in already:
+                out.append(0.8)
+            else:
+                out.append(0.0)
+        elif action.action_type is ActionType.INVESTIGATE:
+            out.append(0.4)
         else:
             out.append(0.0)
     return out
@@ -536,6 +595,8 @@ def default_reward_funcs() -> List[Callable[..., List[float]]]:
         reward_avoids_exfil_path,
         reward_action_diversity,
         reward_observation_aware,
+        reward_batch_action_entropy,
+        reward_evidence_containment,
     ]
 
 
@@ -550,6 +611,7 @@ __all__ = [
     "reward_action_diversity",
     "reward_avoids_exfil_path",
     "reward_batch_action_entropy",
+    "reward_evidence_containment",
     "reward_json_valid",
     "reward_no_redundant_containment",
     "reward_observation_aware",

@@ -60,6 +60,15 @@ def test_reset_is_deterministic_under_same_seed(env: CybersecEnvironment) -> Non
     assert obs_a.model_dump() == obs_b.model_dump()
 
 
+def test_reset_without_seed_rotates_scenarios(env: CybersecEnvironment) -> None:
+    """OpenEnv HTTP reset often omits ``seed``; rng_seed=0 pinned scenario to list[0]."""
+    seen: set[str] = set()
+    for _ in range(48):
+        obs = env.reset(seed=None, scenario_id=None)
+        seen.add(obs.scenario_id)
+    assert len(seen) >= 2, f"expected multiple scenarios, got only {seen!r}"
+
+
 def test_state_endpoint_does_not_leak_attacker_internals(env: CybersecEnvironment) -> None:
     env.reset(seed=0, scenario_id="federated_identity_takeover")
     state = env.state

@@ -32,7 +32,7 @@ The environment is built around the concept of **long-horizon planning**: attack
 **Held-out (Evaluation-only) Scenario**
 | ID | Title | Stages | Horizon |
 |---|---|---|---|
-| `cloud_metadata_ssrf` | SSRF → cloud metadata → assumed role → cloud storage exfil | 4 | 60 |
+| `cloud_metadata_ssrf` | SSRF → cloud metadata → role-chain → KMS replicate → cloud storage exfil | 5 | 70 |
 
 ### The Adversary (Scripted)
 The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG). Each node in the DAG is a sequential stage the attacker must complete to win. To simulate realism, the attacker is assigned one of three personalities (its sample space):
@@ -88,12 +88,13 @@ Training an RL agent is never a straight line. During my initial GRPO training l
 
 The LLM had found a degenerate cheat code. 
 
-The environment utilizes a dense 6-channel reward system:
+The environment utilizes a dense 7-channel reward system:
 
 | Channel                    | Sign | Role |
 |---|---|---|
 | `detection`               | +    | First confirmed compromise of an attacker target |
 | `containment`             | +/-  | Active and preemptive containment, net of action cost |
+| `evidence_bonus`          | +    | Containment actions on targets previously confirmed via INVESTIGATE |
 | `false_positive_penalty`  | −    | Containment on non-attack-path targets |
 | `disruption_penalty`      | −    | Operational cost of isolations and egress blocks |
 | `invalid_action_penalty`  | −    | Structurally invalid JSON actions |
@@ -103,7 +104,11 @@ Because the "disruption penalty" (the cost of taking a business asset offline) h
 
 **The Fix:** I removed the disruption cap, forcing a linearly scaling penalty for every isolated asset. I also restructured the training script into **On-Policy Iterative Self-Play Loops**:
 * **Outer Loop 0 (The Warmup):** The script generates a quick 1,500 rows of data using a hardcoded heuristic policy. The LLM runs its first batch of optimizer steps on this dataset simply to learn the required JSON schema and basic valid actions.
-* **Outer Loop 1+ (True RL):** This is where the magic happens. The LLM generates a brand new dataset by playing the environment itself. By generating rollouts using the LLM's own weights at a high temperature (`1.2`), the model explores strange new states the heuristic script never reached. It makes mistakes, gets penalized, and is forced to actually read the telemetry to learn surgical defense.
+* **Outer Loop 1+ (True RL):** This is where the magic happens. The LLM generates a brand new dataset by playing the environment itself. By generating rollouts using the LLM's own weights at a high temperature (`1.4`), the model explores strange new states the heuristic script never reached. It makes mistakes, gets penalized, and is forced to actually read the telemetry to learn surgical defense.
+
+But one exploit led to another. Even after removing the disruption cap, the model found a new shortcut: on tick 0 (before any alerts had fired), it would immediately `ISOLATE_ASSET` the first valid target. Because the attack kill-chain was a linear DAG, blocking the root stage on tick 0 instantly terminated the attack with a perfect `terminal_clean_bonus`. The model never learned to investigate, never read alerts, never made multi-step decisions. It just said *"unplug the first server, collect the prize."*
+
+**The Second Fix: Evidence-Based Containment.** I added a new reward channel: `evidence_bonus`. The model receives a +1.5 bonus for containing a target it has *already confirmed compromised* via an `INVESTIGATE` action. This means the optimal strategy is no longer "blindly isolate on tick 0" — it's "investigate first, confirm compromise, then surgically contain." The investigate-then-contain workflow scores higher than blind isolation, forcing the model to actually engage with the environment's telemetry.
 
 ## The Takeaway
 

@@ -1,9 +1,10 @@
 """Reward model.
 
-Six clean channels are exposed to the policy and to downstream RL training:
+Seven clean channels are exposed to the policy and to downstream RL training:
 
   * ``detection``              - bonus for confirming a real compromise via INVESTIGATE
   * ``containment``            - bonus for blocking a stage that would otherwise advance
+  * ``evidence_bonus``         - bonus for containing a previously confirmed-compromised target
   * ``false_positive_penalty`` - cost for INVESTIGATE / ISOLATE / REVOKE on a clean target
   * ``disruption_penalty``     - per-tick cost of having business assets isolated/blocked
   * ``invalid_action_penalty`` - cost for an action whose target is not in valid_targets
@@ -56,6 +57,7 @@ class RewardWeights:
     terminal_partial_per_stage: float = 0.6
     terminal_exfil_penalty: float = 6.0
     terminal_idle_penalty: float = 1.5  # if defender did nothing all episode
+    evidence_bonus_per_target: float = 1.5  # bonus for contain after confirmed compromise
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +82,7 @@ class StepSignals:
     succeeded_stage_count: int = 0
     total_stage_count: int = 0
     defender_acted_at_least_once: bool = True
+    containment_on_confirmed: int = 0  # containment actions on confirmed-compromised targets
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +107,7 @@ class RewardModel:
             + w.containment_preemptive_per_stage * len(signals.contained_preemptive_stage_ids)
             - w.containment_action_cost * signals.containment_action_count
         )
+        evidence = w.evidence_bonus_per_target * signals.containment_on_confirmed
         false_positive = -w.false_positive_per_action * signals.false_positive_count
         invalid = -w.invalid_action * signals.invalid_action_count
 
@@ -115,7 +119,7 @@ class RewardModel:
 
         terminal = self._terminal_score(signals) if signals.is_terminal else 0.0
 
-        total = detection + containment + false_positive + invalid + disruption + terminal
+        total = detection + containment + evidence + false_positive + invalid + disruption + terminal
         # Step-level clip protects training from rare blowups; terminal is
         # added separately and *not* clipped (it is what defines win/lose).
         non_terminal = total - terminal
@@ -125,6 +129,7 @@ class RewardModel:
         return RewardBreakdown(
             detection=round(detection, 4),
             containment=round(containment, 4),
+            evidence_bonus=round(evidence, 4),
             false_positive_penalty=round(false_positive, 4),
             disruption_penalty=round(disruption, 4),
             invalid_action_penalty=round(invalid, 4),

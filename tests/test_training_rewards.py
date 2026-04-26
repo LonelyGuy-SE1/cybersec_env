@@ -284,6 +284,10 @@ def test_default_reward_funcs_is_stable_order():
         "reward_no_redundant_containment",
         "reward_step_total",
         "reward_avoids_exfil_path",
+        "reward_action_diversity",
+        "reward_observation_aware",
+        "reward_batch_action_entropy",
+        "reward_evidence_containment",
     ]
 
 

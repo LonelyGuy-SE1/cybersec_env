@@ -106,6 +106,7 @@ class RewardBreakdown(BaseModel):
 
     detection: float = 0.0
     containment: float = 0.0
+    evidence_bonus: float = 0.0
     false_positive_penalty: float = 0.0
     disruption_penalty: float = 0.0
     invalid_action_penalty: float = 0.0

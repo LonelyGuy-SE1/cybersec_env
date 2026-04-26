@@ -2,6 +2,10 @@
 
 ▶️ **Play the Environment:** [huggingface.co/spaces/Lonelyguyse1/cybersec](https://huggingface.co/spaces/Lonelyguyse1/cybersec)
 
+📝 **Blog Post:** [BLOG.md](BLOG.md) — *Teaching a 1.5B LLM to be a SOC Analyst (Without Burning Down the Network)*
+
+🧪 **Training Notebook:** [notebooks/cybersec_grpo.ipynb](notebooks/cybersec_grpo.ipynb) — Colab-ready, runs end-to-end on a T4 GPU
+
 ---
 
 ## 1. The Origin Story: Why I Built This
@@ -37,7 +41,7 @@ The environment includes three training scenarios and one held-out scenario for 
 **Held-out (Evaluation-only) Scenario**
 | ID | Title | Stages | Horizon |
 |---|---|---|---|
-| `cloud_metadata_ssrf` | SSRF → cloud metadata → assumed role → cloud storage exfil | 4 | 60 |
+| `cloud_metadata_ssrf` | SSRF → cloud metadata → role-chain → KMS replicate → cloud storage exfil | 5 | 70 |
 
 ### The Adversary (Scripted)
 The attacker walks a deterministic MITRE ATT&CK-aligned Directed Acyclic Graph (DAG) for the given scenario. Each node in the DAG represents a sequential attack stage the adversary must complete to reach their exfiltration goal. To simulate realism, the attacker is assigned one of three personalities (its sample space):
@@ -91,13 +95,14 @@ A typical interaction forces the LLM to ingest noisy data, decide to investigate
 
 I used **Group Relative Policy Optimization (GRPO)** via Hugging Face TRL and Unsloth (4-bit QLoRA) to train the LLM. 
 
-### The Reward Model (6 Channels)
-Instead of a sparse 0/1 win/loss reward, the environment provides a dense 6-channel reward signal:
+### The Reward Model (7 Channels)
+Instead of a sparse 0/1 win/loss reward, the environment provides a dense 7-channel reward signal:
 
 | Channel                    | Sign | Role |
 |---|---|---|
 | `detection`               | +    | First confirmed compromise of an attacker target |
 | `containment`             | +/-  | Active and preemptive containment, net of action cost |
+| `evidence_bonus`          | +    | Containment actions on targets previously confirmed via INVESTIGATE |
 | `false_positive_penalty`  | −    | Containment on non-attack-path targets |
 | `disruption_penalty`      | −    | Operational cost of isolations and egress blocks |
 | `invalid_action_penalty`  | −    | Structurally invalid JSON actions |
@@ -108,9 +113,11 @@ During my initial GRPO training loop, the model achieved a massive score, but I 
 
 The LLM had found a degenerate cheat code. Because the "disruption penalty" (the cost of taking a business asset offline) had a hard cap per tick, the mathematically optimal move was to instantly `ISOLATE_ASSET` every single server in the company at Tick 0. The LLM essentially said, *"I solved the hack by unplugging the internet."*
 
-**The Fix:** I removed the disruption cap, forcing a linearly scaling penalty for every isolated asset. I also threw out the static offline dataset and restructured the training into **On-Policy Iterative Self-Play Loops**:
+**The Fix:** I removed the disruption cap, forcing a linearly scaling penalty for every isolated asset. I also added an **evidence-based containment bonus**: the model receives a +1.5 reward for containing targets it has *already confirmed compromised* via `INVESTIGATE`. This means "surgically investigate then contain" scores higher than "blindly isolate everything on tick 0." I also threw out the static offline dataset and restructured the training into **On-Policy Iterative Self-Play Loops**:
 * **Outer Loop 0 (The Warmup):** The environment runs a deterministic Heuristic Policy to generate an initial 1,500 rows of training data. The model performs its first batch of GRPO optimizer steps on this dataset just to learn the JSON schema and basic mechanics.
-* **Outer Loop 1+ (True RL):** The LLM takes the wheel. It generates a fresh 1,500 rows of data by playing the environment itself using its own weights at a high temperature (`1.2`). Because it makes mistakes and explores new states, the model is forced to actually read the telemetry, endure the pain of false positive penalties, and learn surgical defense in order to find a true mathematical advantage.
+* **Outer Loop 1+ (True RL):** The LLM takes the wheel. It generates a fresh 1,500 rows of data by playing the environment itself using its own weights at a high temperature (`1.4`). Because it makes mistakes and explores new states, the model is forced to actually read the telemetry, endure the pain of false positive penalties, and learn surgical defense in order to find a true mathematical advantage.
+
+To prevent mode collapse into repetitive actions, the GRPO reward function includes three **dispersion signals**: `reward_action_diversity` (penalises uniform outputs within a candidate group), `reward_observation_aware` (rewards state-conditioned responses to alerts), and `reward_evidence_containment` (a dense proxy for the evidence bonus, reinforcing the investigate-then-contain workflow).
 
 ## 5. Tasks & Grading
 
