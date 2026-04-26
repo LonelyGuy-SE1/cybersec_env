@@ -9,13 +9,13 @@
 <br /><br />
 
 ```
- ██████╗██╗   ██╗██████╗ ███████╗██████╗ ███████╗███████╗ ██████╗
-██╔════╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗██╔════╝██╔════╝██╔════╝
+      ██████╗██╗   ██╗██████╗ ███████╗██████╗ ███████╗███████╗ ██████╗
+     ██╔════╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗██╔════╝██╔════╝██╔════╝
 ██║      ╚████╔╝ ██████╔╝█████╗  ██████╔╝███████╗█████╗  ██║
 ██║       ╚██╔╝  ██╔══██╗██╔══╝  ██╔══██╗╚════██║██╔══╝  ██║
-╚██████╗   ██║   ██████╔╝███████╗██║  ██║███████║███████╗╚██████╗
- ╚═════╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝
-                        O P E N E N V
+     ╚██████╗   ██║   ██████╔╝███████╗██║  ██║███████║███████╗╚██████╗
+      ╚═════╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝
+       O P E N E N V
 ```
 
 ### *Teaching Small LLMs Surgical Cyber-Defense*
@@ -303,15 +303,15 @@ The trained defender is evaluated across three programmatic task axes:
 │                    EVALUATION FRAMEWORK                         │
 ├──────────────────┬──────────────────────┬───────────────────────┤
 │  DETECTION       │  CONTAINMENT         │  SURVIVAL             │
-│                  │                      │                        │
-│  Accurately      │  Block in-progress   │  Prevent final         │
-│  identify and    │  lateral movement    │  exfiltration stage.   │
-│  confirm         │  or exfiltration     │                        │
-│  compromised     │  attempts.           │  Massive terminal      │
-│  targets.        │                      │  penalty on failure;   │
-│                  │  Scored by attack    │  survival bonus on     │
-│  Scored by true  │  stages prevented.   │  network preservation. │
-│  positive rate.  │                      │                        │
+│                  │                      │                       │
+│  Accurately      │  Block in-progress   │  Prevent final        │
+│  identify and    │  lateral movement    │  exfiltration stage.  │
+│  confirm         │  or exfiltration     │                       │
+│  compromised     │  attempts.           │  Massive terminal     │
+│  targets.        │                      │  penalty on failure;  │
+│                  │  Scored by attack    │  survival bonus on    │
+│  Scored by true  │  stages prevented.   │  network preservation.│
+│  positive rate.  │                      │                       │
 └──────────────────┴──────────────────────┴───────────────────────┘
 ```
 
