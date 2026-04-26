@@ -290,7 +290,8 @@ Cumulative reward curves per scenario (n=30 seeds). Included to confirm reward s
  
 All four policies on identical axes. The held-out panel (rightmost) shows the trained-llm separating cleanly from the pack with near-zero variance — the policy is decisive and consistent on novel attack chains.
  
-![Before/after GRPO — all four policies across all scenarios](assets/before_after_curves.png)
+![Before/after GRPO — all four policies across all scenarios](<img width="1189" height="495" alt="image" src="https://github.com/user-attachments/assets/0b129b1b-80fc-483a-9992-27e6c57021db" />
+)
  
 ---
  
