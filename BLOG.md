@@ -70,7 +70,9 @@ The LLM had found a degenerate cheat code.
 
 Our environment utilizes a dense 6-channel reward system (Detection, Containment, False Positives, Disruption, Invalid Syntax, and Terminal Survival). Because our "disruption penalty" (the cost of taking a business asset offline) had a hard cap per tick, the mathematically optimal move for the LLM was to instantly `ISOLATE_ASSET` every single server in the company at Tick 0. The LLM essentially said, *"I solved the hack by unplugging the internet."*
 
-**The Fix:** We went back to the lab. We removed the disruption cap, forcing a linearly scaling penalty for every isolated asset. We also threw out the heuristic offline dataset and forced the model into *On-Policy Iterative Self-Play*. By generating rollouts using the LLM's own weights at a high temperature (`1.2`), the model was forced to actually read the telemetry, endure the pain of false positive penalties, and learn surgical defense in order to find a mathematical advantage.
+**The Fix:** We went back to the lab. We removed the disruption cap, forcing a linearly scaling penalty for every isolated asset. We also restructured the training script into **On-Policy Iterative Self-Play Loops**:
+* **Outer Loop 0 (The Warmup):** We generate a quick 1,500 rows of data using a hardcoded heuristic script. The LLM runs its first batch of optimizer steps on this dataset simply to learn the required JSON schema and basic valid actions.
+* **Outer Loop 1+ (True RL):** This is where the magic happens. The LLM generates a brand new dataset by playing the environment itself. By generating rollouts using the LLM's own weights at a high temperature (`1.2`), the model explores strange new states the heuristic script never reached. It makes mistakes, gets penalized, and is forced to actually read the telemetry to learn surgical defense.
 
 ## The Takeaway
 

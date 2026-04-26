@@ -88,7 +88,9 @@ During our initial GRPO training loop, the model achieved a massive score, but w
 
 The LLM had found a degenerate cheat code. Because our "disruption penalty" (the cost of taking a business asset offline) had a hard cap per tick, the mathematically optimal move was to instantly `ISOLATE_ASSET` every single server in the company at Tick 0. The LLM essentially said, *"I solved the hack by unplugging the internet."*
 
-**The Fix:** We removed the disruption cap, forcing a linearly scaling penalty for every isolated asset. We also threw out the heuristic offline dataset and forced the model into **On-Policy Iterative Self-Play**. By generating rollouts using the LLM's own weights at a high temperature (`1.2`), the model was forced to actually read the telemetry, endure the pain of false positives, and learn surgical defense to maximize its gradient advantages.
+**The Fix:** We removed the disruption cap, forcing a linearly scaling penalty for every isolated asset. We also threw out the static offline dataset and restructured the training into **On-Policy Iterative Self-Play Loops**:
+* **Outer Loop 0 (The Warmup):** The environment runs a deterministic Heuristic Policy to generate an initial 1,500 rows of training data. The model performs its first batch of GRPO optimizer steps on this dataset just to learn the JSON schema and basic mechanics.
+* **Outer Loop 1+ (True RL):** The LLM takes the wheel. It generates a fresh 1,500 rows of data by playing the environment itself using its own weights at a high temperature (`1.2`). Because it makes mistakes and explores new states, the model is forced to actually read the telemetry, endure the pain of false positive penalties, and learn surgical defense in order to find a true mathematical advantage.
 
 ## 5. Tasks & Grading
 
